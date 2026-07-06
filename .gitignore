@@ -1,0 +1,46 @@
+# =============================================================
+# Archivos que Git NUNCA debe rastrear
+# =============================================================
+
+# --- Credenciales (CRÍTICO: nunca subir a Git) ---
+.env
+*.env
+!.env.example
+
+# --- Entorno virtual de Python ---
+venv/
+.venv/
+env/
+
+# --- Archivos compilados de Python ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# --- Logs y capturas (cambian todo el tiempo) ---
+logs/
+capturas/
+*.log
+
+# --- Archivos descargados (no son código fuente) ---
+*.xml
+*.pdf
+*.xlsx
+
+# --- Estado de sesión de Playwright (contiene cookies) ---
+sesion_*.json
+storage_state.json
+
+# --- Sistemas operativos ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Editores e IDEs ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

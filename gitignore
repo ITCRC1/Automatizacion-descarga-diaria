@@ -1,0 +1,17 @@
+# Credenciales - NUNCA subir a GitHub
+*.json
+.env
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs
+*.log
+
+# Temporales
+dist/
+build/
+*.spec
