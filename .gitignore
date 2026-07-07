@@ -33,6 +33,12 @@ capturas/
 sesion_*.json
 storage_state.json
 
+# --- Grabaciones de playwright codegen (suelen tener usuario/password en texto plano) ---
+codegen_*.py
+
+# --- Screenshots de diagnóstico (pueden contener datos de la cuenta) ---
+/debug/
+
 # --- Sistemas operativos ---
 .DS_Store
 Thumbs.db
