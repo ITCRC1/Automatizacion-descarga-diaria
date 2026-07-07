@@ -104,14 +104,16 @@ def _diagnosticar_menu_cerrado(page, link, texto_link: str) -> None:
 
 def _abrir_menu_dropdown(page, menu_selector: str, texto_link: str, exact: bool = False, intentos: int = 5):
     """Abre un menú desplegable de Oracle ADF (Reports, Exports, etc.) y hace
-    click en el link indicado. El menú a veces no abre al primer click porque
-    ADF tarda en renderizar, así que reintenta clickeando el botón del menú
-    hasta que el link objetivo esté visible."""
+    click en el link indicado. Usa un click real de mouse (no simulado por
+    JS) porque el panel emergente de ADF depende de un evento de mouse
+    "trusted" con coordenadas reales para calcular y renderizar su contenido;
+    un click disparado por evaluate() deja el panel colapsado en 0×0.
+    Reintenta por si ADF tarda en pintar el panel."""
     menu = page.locator(menu_selector)
     link = page.get_by_text(texto_link, exact=exact)
     for intento in range(intentos):
-        menu.evaluate("el => el.click()")
         try:
+            menu.click(timeout=5000)
             link.wait_for(state="visible", timeout=3000)
             break
         except Exception:
