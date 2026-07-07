@@ -91,7 +91,7 @@ def main():
     archivos_opera = []
     try:
         from modulos.opera import descargar_opera
-        archivos_opera = descargar_opera(carpetas["opera"], headless=True)
+        archivos_opera = descargar_opera(carpetas["opera"], headless=False)
         logger.info(f"Opera: {len(archivos_opera)} archivos descargados ✓")
         subir_archivos(archivos_opera, "opera", fecha_str)
         logger.info("Opera: archivos subidos a Drive ✓")
@@ -115,7 +115,7 @@ def main():
             )
 
         archivos_integrity = subir_revenue_y_descargar(
-            revenue_xml, carpetas["integrity"], fecha_reporte=fecha_reporte, headless=True
+            revenue_xml, carpetas["integrity"], fecha_reporte=fecha_reporte, headless=False
         )
         logger.info(f"Integrity: {len(archivos_integrity)} archivo(s) descargado(s) ✓")
         subir_archivos(archivos_integrity, "integrity", fecha_str)
@@ -131,7 +131,7 @@ def main():
     ors_ok = False
     try:
         from modulos.ors import descargar_reportes_ors
-        archivos_ors = descargar_reportes_ors(carpetas["pos"], headless=True)
+        archivos_ors = descargar_reportes_ors(carpetas["pos"], headless=False)
         logger.info(f"ORS: {len(archivos_ors)} archivos descargados ✓")
         ors_ok = True
     except Exception as e:
