@@ -67,17 +67,27 @@ def _guardar(descarga, carpeta: Path, prefijo: str, fecha_str: str) -> Path:
 
 
 def _diagnosticar_menu_cerrado(page, link, texto_link: str) -> None:
-    """Vuelca evidencia (CSS del elemento buscado + screenshot) a disco cuando
-    un menú no llegó a abrirse tras varios reintentos. Se guarda fuera de la
-    carpeta temporal de descargas porque esa carpeta se borra al final de
-    main.py incluso si el proceso terminó con errores."""
+    """Vuelca evidencia a los logs (no a un archivo, para no depender de
+    poder sacar la captura del contenedor) cuando un menú no llegó a abrirse
+    tras varios reintentos. Recorre el elemento buscado y sus contenedores
+    padres registrando tamaño real en pantalla (bounding box) y overflow,
+    porque un elemento puede tener display/visibility "normales" y aun así
+    estar oculto para Playwright si algún padre lo colapsó a 0×0."""
     try:
-        info = link.first.evaluate(
-            "el => { const cs = getComputedStyle(el); "
-            "return {clase: el.className, display: cs.display, visibility: cs.visibility, "
-            "opacidad: cs.opacity, ancestroOculto: !!el.closest('[style*=\"display: none\"], [hidden]')}; }"
+        cadena = link.first.evaluate(
+            "el => { const out = []; let node = el; let depth = 0; "
+            "while (node && depth < 8) { "
+            "const cs = getComputedStyle(node); "
+            "const r = node.getBoundingClientRect(); "
+            "out.push({tag: node.tagName, clase: node.className, "
+            "display: cs.display, visibility: cs.visibility, overflow: cs.overflow, "
+            "ancho: Math.round(r.width), alto: Math.round(r.height)}); "
+            "node = node.parentElement; depth++; } "
+            "return out; }"
         )
-        logger.error(f"Diagnóstico '{texto_link}': {info}")
+        logger.error(f"Diagnóstico '{texto_link}' (elemento → ancestros):")
+        for nivel, info in enumerate(cadena):
+            logger.error(f"  [{nivel}] {info}")
     except Exception as diag_err:
         logger.error(f"No se pudo diagnosticar '{texto_link}': {diag_err}")
 
@@ -87,7 +97,7 @@ def _diagnosticar_menu_cerrado(page, link, texto_link: str) -> None:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         screenshot_path = debug_dir / f"menu_{texto_link.replace(' ', '_')}_{ts}.png"
         page.screenshot(path=str(screenshot_path), full_page=True)
-        logger.error(f"Screenshot guardado en: {screenshot_path}")
+        logger.error(f"Screenshot guardado en: {screenshot_path} (usá 'docker cp <container>:{screenshot_path} .' para sacarlo)")
     except Exception as ss_err:
         logger.error(f"No se pudo guardar screenshot: {ss_err}")
 
