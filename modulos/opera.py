@@ -66,6 +66,25 @@ def _guardar(descarga, carpeta: Path, prefijo: str, fecha_str: str) -> Path:
     return destino
 
 
+def _abrir_menu_dropdown(page, menu_selector: str, texto_link: str, exact: bool = False, intentos: int = 5):
+    """Abre un menú desplegable de Oracle ADF (Reports, Exports, etc.) y hace
+    click en el link indicado. El menú a veces no abre al primer click porque
+    ADF tarda en renderizar, así que reintenta clickeando el botón del menú
+    hasta que el link objetivo esté visible."""
+    menu = page.locator(menu_selector)
+    link = page.get_by_text(texto_link, exact=exact)
+    for intento in range(intentos):
+        menu.evaluate("el => el.click()")
+        try:
+            link.wait_for(state="visible", timeout=3000)
+            break
+        except Exception:
+            if intento == intentos - 1:
+                raise
+            page.wait_for_timeout(800)
+    link.click()
+
+
 def _buscar_reporte(page, nombre: str):
     """Limpia el campo, escribe el nombre y hace click en Buscar."""
     campo = page.get_by_role("textbox", name="Report Name")
@@ -195,13 +214,12 @@ def descargar_opera(carpeta_destino: Path, headless: bool = False) -> list[Path]
 
         # ── Manage Reports ─────────────────────────────────────────────────────
         logger.info("Abriendo Manage Reports...")
-        menu_reports = page.locator(
+        _abrir_menu_dropdown(
+            page,
             "[id=\"pt1:oc_pg_pt:dm1:odec_drpmn_mb_grp:6:odec_drpmn_mb_mn\"] "
-            "> .x2c8 > table > tbody > tr > td:nth-child(3) > .x2a5"
+            "> .x2c8 > table > tbody > tr > td:nth-child(3) > .x2a5",
+            "Manage Reports",
         )
-        menu_reports.evaluate("el => el.click()")
-        page.wait_for_timeout(1000)
-        page.get_by_text("Manage Reports").click()
 
         # -- Reporte 1: History and Forecast (defecto) -------------------------
         logger.info("Descargando History and Forecast (defecto)...")
@@ -252,13 +270,13 @@ def descargar_opera(carpeta_destino: Path, headless: bool = False) -> list[Path]
 
         # ── Exports → General ─────────────────────────────────────────────────
         logger.info("Abriendo Exports → General...")
-        menu_exports = page.locator(
+        _abrir_menu_dropdown(
+            page,
             "[id=\"pt1:oc_pg_pt:dm1:odec_drpmn_mb_grp:5:odec_drpmn_mb_mn\"] "
-            "> .x2c8 > table > tbody > tr > td:nth-child(3) > .x2a5"
+            "> .x2c8 > table > tbody > tr > td:nth-child(3) > .x2a5",
+            "Exports",
+            exact=True,
         )
-        menu_exports.evaluate("el => el.click()")
-        page.wait_for_timeout(1000)
-        page.get_by_text("Exports", exact=True).click()
         page.get_by_text("General").click()
         page.wait_for_load_state("networkidle")
         page.wait_for_timeout(1500)  # dar tiempo a que la tabla cargue completa
