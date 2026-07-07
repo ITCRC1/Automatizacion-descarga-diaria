@@ -19,8 +19,9 @@ logger = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
-# Carpeta raiz compartida con la service account
-CARPETA_RAIZ = "Auditoria Corcovado"
+# ID directo de la carpeta "Auditoria Corcovado" en Google Drive
+# (tomado de la URL: drive.google.com/drive/folders/ESTE_ID)
+CARPETA_RAIZ_ID = "1ZdshgXzQUcdjbQGHwfA_T6Epo1d3pPdT"
 
 
 def _get_service():
@@ -65,24 +66,6 @@ def _get_or_create_folder(service, nombre: str, parent_id: str = None) -> str:
     return carpeta["id"]
 
 
-def _find_root_folder(service) -> str:
-    """Encuentra la carpeta raiz compartida con la service account."""
-    query = (
-        f"name='{CARPETA_RAIZ}' and "
-        f"mimeType='application/vnd.google-apps.folder' and "
-        f"trashed=false"
-    )
-    resultados = service.files().list(q=query, fields="files(id, name)").execute()
-    archivos = resultados.get("files", [])
-
-    if not archivos:
-        raise RuntimeError(
-            f"No se encontró la carpeta '{CARPETA_RAIZ}' en Drive.\n"
-            "Verificá que esté compartida con la service account."
-        )
-    return archivos[0]["id"]
-
-
 def subir_archivos(archivos: list[Path], subcarpeta: str, fecha_str: str):
     """
     Sube una lista de archivos a Drive en la estructura:
@@ -98,11 +81,10 @@ def subir_archivos(archivos: list[Path], subcarpeta: str, fecha_str: str):
 
     service = _get_service()
 
-    # Navegar / crear la estructura de carpetas
-    raiz_id      = _find_root_folder(service)
-    inputs_id    = _get_or_create_folder(service, "Inputs",    raiz_id)
-    fecha_id     = _get_or_create_folder(service, fecha_str,   inputs_id)
-    destino_id   = _get_or_create_folder(service, subcarpeta,  fecha_id)
+    # Usar el ID directo de la carpeta raiz (sin buscar por nombre)
+    inputs_id  = _get_or_create_folder(service, "Inputs",     CARPETA_RAIZ_ID)
+    fecha_id   = _get_or_create_folder(service, fecha_str,    inputs_id)
+    destino_id = _get_or_create_folder(service, subcarpeta,   fecha_id)
 
     for archivo in archivos:
         archivo = Path(archivo)

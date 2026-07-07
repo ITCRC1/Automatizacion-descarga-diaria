@@ -141,12 +141,23 @@ def descargar_opera(carpeta_destino: Path, headless: bool = False) -> list[Path]
     archivos: list[Path] = []
 
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=headless, args=["--start-maximized"])
-        context = browser.new_context(
-            no_viewport=True,
-            accept_downloads=True,
-            locale="es-419",
-        )
+        if headless:
+            browser = playwright.chromium.launch(
+                headless=True,
+                args=["--window-size=1920,1080", "--disable-blink-features=AutomationControlled"],
+            )
+            context = browser.new_context(
+                viewport={"width": 1920, "height": 1080},
+                accept_downloads=True,
+                locale="es-419",
+            )
+        else:
+            browser = playwright.chromium.launch(headless=False, args=["--start-maximized"])
+            context = browser.new_context(
+                no_viewport=True,
+                accept_downloads=True,
+                locale="es-419",
+            )
         page = context.new_page()
 
         # ── Login ──────────────────────────────────────────────────────────────
@@ -184,10 +195,13 @@ def descargar_opera(carpeta_destino: Path, headless: bool = False) -> list[Path]
 
         # ── Manage Reports ─────────────────────────────────────────────────────
         logger.info("Abriendo Manage Reports...")
-        page.locator(
+        menu_reports = page.locator(
             "[id=\"pt1:oc_pg_pt:dm1:odec_drpmn_mb_grp:6:odec_drpmn_mb_mn\"] "
             "> .x2c8 > table > tbody > tr > td:nth-child(3) > .x2a5"
-        ).click()
+        )
+        menu_reports.hover(force=True)
+        page.wait_for_timeout(800)
+        menu_reports.click(force=True)
         page.get_by_text("Manage Reports").click()
 
         # -- Reporte 1: History and Forecast (defecto) -------------------------
@@ -239,10 +253,13 @@ def descargar_opera(carpeta_destino: Path, headless: bool = False) -> list[Path]
 
         # ── Exports → General ─────────────────────────────────────────────────
         logger.info("Abriendo Exports → General...")
-        page.locator(
+        menu_exports = page.locator(
             "[id=\"pt1:oc_pg_pt:dm1:odec_drpmn_mb_grp:5:odec_drpmn_mb_mn\"] "
             "> .x2c8 > table > tbody > tr > td:nth-child(3) > .x2a5"
-        ).click()
+        )
+        menu_exports.hover(force=True)
+        page.wait_for_timeout(800)
+        menu_exports.click(force=True)
         page.get_by_text("Exports", exact=True).click()
         page.get_by_text("General").click()
         page.wait_for_load_state("networkidle")
