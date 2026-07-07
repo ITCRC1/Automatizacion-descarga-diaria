@@ -199,9 +199,8 @@ def descargar_opera(carpeta_destino: Path, headless: bool = False) -> list[Path]
             "[id=\"pt1:oc_pg_pt:dm1:odec_drpmn_mb_grp:6:odec_drpmn_mb_mn\"] "
             "> .x2c8 > table > tbody > tr > td:nth-child(3) > .x2a5"
         )
-        menu_reports.hover(force=True)
-        page.wait_for_timeout(800)
-        menu_reports.click(force=True)
+        menu_reports.evaluate("el => el.click()")
+        page.wait_for_timeout(1000)
         page.get_by_text("Manage Reports").click()
 
         # -- Reporte 1: History and Forecast (defecto) -------------------------
@@ -257,9 +256,8 @@ def descargar_opera(carpeta_destino: Path, headless: bool = False) -> list[Path]
             "[id=\"pt1:oc_pg_pt:dm1:odec_drpmn_mb_grp:5:odec_drpmn_mb_mn\"] "
             "> .x2c8 > table > tbody > tr > td:nth-child(3) > .x2a5"
         )
-        menu_exports.hover(force=True)
-        page.wait_for_timeout(800)
-        menu_exports.click(force=True)
+        menu_exports.evaluate("el => el.click()")
+        page.wait_for_timeout(1000)
         page.get_by_text("Exports", exact=True).click()
         page.get_by_text("General").click()
         page.wait_for_load_state("networkidle")
