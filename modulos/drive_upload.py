@@ -2,8 +2,11 @@
 modulos/drive_upload.py
 
 Maneja la subida de archivos a Google Drive via API usando
-una Service Account. Las credenciales vienen de la variable
-de entorno GOOGLE_CREDENTIALS_JSON.
+una Service Account. Los archivos se guardan en una UNIDAD COMPARTIDA
+(Shared Drive), necesaria porque las service accounts no tienen
+almacenamiento propio.
+
+Las credenciales vienen de la variable de entorno GOOGLE_CREDENTIALS_JSON.
 """
 
 import json
@@ -19,9 +22,9 @@ logger = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
-# ID directo de la carpeta "Auditoria Corcovado" en Google Drive
+# ID de la Unidad Compartida "Auditoria Corcovado"
 # (tomado de la URL: drive.google.com/drive/folders/ESTE_ID)
-CARPETA_RAIZ_ID = "1ZdshgXzQUcdjbQGHwfA_T6Epo1d3pPdT"
+SHARED_DRIVE_ID = "0AKEzInrdMcvUUk9PVA"
 
 
 def _get_service():
@@ -37,17 +40,25 @@ def _get_service():
     return build("drive", "v3", credentials=credentials)
 
 
-def _get_or_create_folder(service, nombre: str, parent_id: str = None) -> str:
-    """Busca una carpeta por nombre. Si no existe, la crea."""
+def _get_or_create_folder(service, nombre: str, parent_id: str) -> str:
+    """
+    Busca una carpeta por nombre dentro de parent_id. Si no existe, la crea.
+    Compatible con Unidades Compartidas.
+    """
     query = (
         f"name='{nombre}' and "
         f"mimeType='application/vnd.google-apps.folder' and "
+        f"'{parent_id}' in parents and "
         f"trashed=false"
     )
-    if parent_id:
-        query += f" and '{parent_id}' in parents"
-
-    resultados = service.files().list(q=query, fields="files(id, name)").execute()
+    resultados = service.files().list(
+        q=query,
+        fields="files(id, name)",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
+        corpora="drive",
+        driveId=SHARED_DRIVE_ID,
+    ).execute()
     archivos = resultados.get("files", [])
 
     if archivos:
@@ -57,18 +68,20 @@ def _get_or_create_folder(service, nombre: str, parent_id: str = None) -> str:
     metadata = {
         "name": nombre,
         "mimeType": "application/vnd.google-apps.folder",
+        "parents": [parent_id],
     }
-    if parent_id:
-        metadata["parents"] = [parent_id]
-
-    carpeta = service.files().create(body=metadata, fields="id").execute()
+    carpeta = service.files().create(
+        body=metadata,
+        fields="id",
+        supportsAllDrives=True,
+    ).execute()
     logger.info(f"Carpeta creada en Drive: {nombre}")
     return carpeta["id"]
 
 
 def subir_archivos(archivos: list[Path], subcarpeta: str, fecha_str: str):
     """
-    Sube una lista de archivos a Drive en la estructura:
+    Sube una lista de archivos a la Unidad Compartida en la estructura:
     Auditoria Corcovado / Inputs / YYYY-MM-DD / subcarpeta /
 
     Parametros:
@@ -81,8 +94,8 @@ def subir_archivos(archivos: list[Path], subcarpeta: str, fecha_str: str):
 
     service = _get_service()
 
-    # Usar el ID directo de la carpeta raiz (sin buscar por nombre)
-    inputs_id  = _get_or_create_folder(service, "Inputs",     CARPETA_RAIZ_ID)
+    # La raiz de la estructura es la Unidad Compartida en si misma
+    inputs_id  = _get_or_create_folder(service, "Inputs",     SHARED_DRIVE_ID)
     fecha_id   = _get_or_create_folder(service, fecha_str,    inputs_id)
     destino_id = _get_or_create_folder(service, subcarpeta,   fecha_id)
 
@@ -98,6 +111,9 @@ def subir_archivos(archivos: list[Path], subcarpeta: str, fecha_str: str):
             "parents": [destino_id],
         }
         service.files().create(
-            body=metadata, media_body=media, fields="id"
+            body=metadata,
+            media_body=media,
+            fields="id",
+            supportsAllDrives=True,
         ).execute()
         logger.info(f"Subido a Drive: {archivo.name}")
