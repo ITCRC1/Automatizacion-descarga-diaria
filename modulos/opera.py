@@ -66,6 +66,32 @@ def _guardar(descarga, carpeta: Path, prefijo: str, fecha_str: str) -> Path:
     return destino
 
 
+def _diagnosticar_menu_cerrado(page, link, texto_link: str) -> None:
+    """Vuelca evidencia (CSS del elemento buscado + screenshot) a disco cuando
+    un menú no llegó a abrirse tras varios reintentos. Se guarda fuera de la
+    carpeta temporal de descargas porque esa carpeta se borra al final de
+    main.py incluso si el proceso terminó con errores."""
+    try:
+        info = link.first.evaluate(
+            "el => { const cs = getComputedStyle(el); "
+            "return {clase: el.className, display: cs.display, visibility: cs.visibility, "
+            "opacidad: cs.opacity, ancestroOculto: !!el.closest('[style*=\"display: none\"], [hidden]')}; }"
+        )
+        logger.error(f"Diagnóstico '{texto_link}': {info}")
+    except Exception as diag_err:
+        logger.error(f"No se pudo diagnosticar '{texto_link}': {diag_err}")
+
+    try:
+        debug_dir = Path(__file__).resolve().parent.parent / "debug"
+        debug_dir.mkdir(exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        screenshot_path = debug_dir / f"menu_{texto_link.replace(' ', '_')}_{ts}.png"
+        page.screenshot(path=str(screenshot_path), full_page=True)
+        logger.error(f"Screenshot guardado en: {screenshot_path}")
+    except Exception as ss_err:
+        logger.error(f"No se pudo guardar screenshot: {ss_err}")
+
+
 def _abrir_menu_dropdown(page, menu_selector: str, texto_link: str, exact: bool = False, intentos: int = 5):
     """Abre un menú desplegable de Oracle ADF (Reports, Exports, etc.) y hace
     click en el link indicado. El menú a veces no abre al primer click porque
@@ -80,6 +106,7 @@ def _abrir_menu_dropdown(page, menu_selector: str, texto_link: str, exact: bool 
             break
         except Exception:
             if intento == intentos - 1:
+                _diagnosticar_menu_cerrado(page, link, texto_link)
                 raise
             page.wait_for_timeout(800)
     link.click()
