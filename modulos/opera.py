@@ -97,23 +97,44 @@ def _diagnosticar_menu_cerrado(page, link, texto_link: str) -> None:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         screenshot_path = debug_dir / f"menu_{texto_link.replace(' ', '_')}_{ts}.png"
         page.screenshot(path=str(screenshot_path), full_page=True)
-        logger.error(f"Screenshot guardado en: {screenshot_path} (usá 'docker cp <container>:{screenshot_path} .' para sacarlo)")
+        logger.error(f"Screenshot guardado localmente en: {screenshot_path}")
     except Exception as ss_err:
         logger.error(f"No se pudo guardar screenshot: {ss_err}")
+        return
+
+    # Subimos el screenshot a Drive porque en Railway no hay acceso al
+    # filesystem del contenedor (no se puede hacer "docker cp" ahí) — Drive
+    # es el único lugar accesible sin importar dónde corra el proceso.
+    try:
+        from modulos.drive_upload import subir_archivos
+        subir_archivos([screenshot_path], "debug", datetime.now().strftime("%Y-%m-%d"))
+        logger.error("Screenshot subido a Drive (Inputs / <fecha de hoy> / debug) ✓")
+    except Exception as upload_err:
+        logger.error(f"No se pudo subir el screenshot a Drive: {upload_err}")
 
 
 def _abrir_menu_dropdown(page, menu_selector: str, texto_link: str, exact: bool = False, intentos: int = 5):
     """Abre un menú desplegable de Oracle ADF (Reports, Exports, etc.) y hace
-    click en el link indicado. Usa un click real de mouse (no simulado por
-    JS) porque el panel emergente de ADF depende de un evento de mouse
-    "trusted" con coordenadas reales para calcular y renderizar su contenido;
-    un click disparado por evaluate() deja el panel colapsado en 0×0.
-    Reintenta por si ADF tarda en pintar el panel."""
+    click en el link indicado. El botón disparador (una flechita) no tiene
+    tamaño propio, así que un click real de Playwright no puede apuntarle
+    (falla "element is not visible") — por eso se sigue disparando por JS,
+    igual que en la versión original. La diferencia acá es que se dispara la
+    secuencia completa mouseover→mousedown→mouseup→click en vez de sólo
+    "click", porque el handler de ADF que abre el panel puede estar atado a
+    mousedown y no reaccionar a un .click() sintético (que sólo emite el
+    evento "click"). Reintenta por si ADF tarda en pintar el panel."""
     menu = page.locator(menu_selector)
     link = page.get_by_text(texto_link, exact=exact)
+    disparar_eventos = (
+        "el => { const o = {bubbles: true, cancelable: true, view: window}; "
+        "el.dispatchEvent(new MouseEvent('mouseover', o)); "
+        "el.dispatchEvent(new MouseEvent('mousedown', o)); "
+        "el.dispatchEvent(new MouseEvent('mouseup', o)); "
+        "el.dispatchEvent(new MouseEvent('click', o)); }"
+    )
     for intento in range(intentos):
+        menu.evaluate(disparar_eventos)
         try:
-            menu.click(timeout=5000)
             link.wait_for(state="visible", timeout=3000)
             break
         except Exception:
