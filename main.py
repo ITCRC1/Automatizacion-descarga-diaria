@@ -1,38 +1,31 @@
 """
-main.py
+main.py — versión Railway
 
-Orquestador del proceso diario de descargas para Railway.
+Orquestador del proceso diario de descargas para correr en la nube.
 
 Flujo:
-  1. Descarga archivos a una carpeta temporal
-  2. Sube los archivos a Google Drive via API
+  1. Descarga cada fuente a una carpeta temporal (/tmp)
+  2. Sube los archivos a Google Drive (Unidad Compartida) via API
   3. Limpia la carpeta temporal
 
-Estructura en Google Drive:
+Estructura resultante en la Unidad Compartida:
   Auditoria Corcovado / Inputs / YYYY-MM-DD /
-  ├── opera/
-  ├── integrity/
-  └── pos/
+      ├── opera/       ← 9 archivos de Opera Cloud
+      ├── integrity/   ← 1 Excel de Integrity
+      └── pos/         ← 1 Excel consolidado
 
 Variables de entorno requeridas en Railway:
-  GOOGLE_CREDENTIALS_JSON  <- contenido del JSON de la service account
-
-  OPERA_USERNAME
-  OPERA_PASSWORD
-
-  INTEGRITY_USERNAME
-  INTEGRITY_PASSWORD
-
-  ORS_USERNAME
-  ORS_ENTERPRISE
-  ORS_PASSWORD
+  GOOGLE_CREDENTIALS_JSON   (contenido del JSON de la service account)
+  OPERA_USERNAME / OPERA_PASSWORD
+  INTEGRITY_USERNAME / INTEGRITY_PASSWORD
+  ORS_USERNAME / ORS_ENTERPRISE / ORS_PASSWORD
 """
 
 import logging
 import os
 import sys
-import tempfile
 import shutil
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -44,18 +37,13 @@ load_dotenv()
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-    ],
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger(__name__)
 
 
 def preparar_carpetas_temp() -> tuple[Path, dict[str, Path]]:
-    """
-    Crea carpetas temporales para las descargas.
-    Devuelve la carpeta raiz y un dict con las subcarpetas.
-    """
+    """Crea las carpetas temporales de trabajo. Devuelve (raiz_temp, dict)."""
     fecha_str = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
     raiz = Path(tempfile.mkdtemp()) / fecha_str
 
@@ -84,7 +72,7 @@ def main():
 
     from modulos.drive_upload import subir_archivos
 
-    # ── 1. Opera Cloud ────────────────────────────────────────────────────
+    # ── 1. Opera Cloud ──────────────────────────────────────────────────────
     logger.info("─" * 40)
     logger.info("PASO 1/3 — Opera Cloud")
     logger.info("─" * 40)
@@ -99,7 +87,7 @@ def main():
         logger.error(f"Opera falló: {e}", exc_info=True)
         errores.append(f"Opera: {e}")
 
-    # ── 2. Integrity ──────────────────────────────────────────────────────
+    # ── 2. Integrity ────────────────────────────────────────────────────────
     logger.info("─" * 40)
     logger.info("PASO 2/3 — Integrity")
     logger.info("─" * 40)
@@ -107,7 +95,6 @@ def main():
         from modulos.integrity import subir_revenue_y_descargar
 
         revenue_xml = carpetas["opera"] / f"OPERA_GEN_XMLBO_REVENUE_{fecha_str}.xml"
-
         if not revenue_xml.exists():
             raise FileNotFoundError(
                 f"No se encontró el XML de revenue: {revenue_xml}\n"
@@ -124,7 +111,7 @@ def main():
         logger.error(f"Integrity falló: {e}", exc_info=True)
         errores.append(f"Integrity: {e}")
 
-    # ── 3. ORS (POS) ──────────────────────────────────────────────────────
+    # ── 3. ORS (POS) ────────────────────────────────────────────────────────
     logger.info("─" * 40)
     logger.info("PASO 3/3 — Reporting, Analytics and People (ORS/POS)")
     logger.info("─" * 40)
@@ -138,7 +125,7 @@ def main():
         logger.error(f"ORS falló: {e}", exc_info=True)
         errores.append(f"ORS: {e}")
 
-    # ── 3b. Consolidar POS ────────────────────────────────────────────────
+    # ── 3b. Consolidar POS y subir ──────────────────────────────────────────
     if ors_ok:
         logger.info("─" * 40)
         logger.info("PASO 3b — Consolidando reporte POS")
@@ -155,23 +142,24 @@ def main():
             logger.error(f"Consolidación POS falló: {e}", exc_info=True)
             errores.append(f"Consolidación POS: {e}")
 
-    # ── Limpiar temporales ────────────────────────────────────────────────
+    # ── Limpiar temporales ──────────────────────────────────────────────────
     try:
         shutil.rmtree(raiz_temp.parent)
         logger.info("Carpeta temporal limpiada ✓")
     except Exception:
         pass
 
-    # ── Resumen ───────────────────────────────────────────────────────────
+    # ── Resumen ─────────────────────────────────────────────────────────────
     logger.info("=" * 60)
     if errores:
         logger.warning("PROCESO TERMINADO CON ERRORES:")
         for err in errores:
             logger.warning(f"  • {err}")
+        logger.info("=" * 60)
         sys.exit(1)
     else:
         logger.info("PROCESO COMPLETADO SIN ERRORES ✓")
-    logger.info("=" * 60)
+        logger.info("=" * 60)
 
 
 if __name__ == "__main__":

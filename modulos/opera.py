@@ -363,7 +363,15 @@ def descargar_opera(carpeta_destino: Path, headless: bool = False) -> list[Path]
             "Exports",
             exact=True,
         )
-        page.get_by_text("General").click()
+        # "General" es un submenu que aparece dentro de "Exports". En headless
+        # queda "invisible" para Playwright igual que los menus padre, asi que
+        # se intenta el click normal y, si falla, se hace click JS directo.
+        general = page.get_by_text("General")
+        try:
+            general.click(timeout=5000)
+        except Exception:
+            general.first.evaluate("el => el.click()")
+            logger.info("'General' abierto por click JS directo (fallback).")
         page.wait_for_load_state("networkidle")
         page.wait_for_timeout(1500)  # dar tiempo a que la tabla cargue completa
 
