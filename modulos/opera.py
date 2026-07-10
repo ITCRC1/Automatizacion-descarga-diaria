@@ -117,27 +117,53 @@ def _abrir_menu_dropdown(page, menu_selector: str, texto_link: str, exact: bool 
     """Abre un menú desplegable de Oracle ADF (Reports, Exports, etc.) y hace
     click en el link indicado. El botón disparador (una flechita) no tiene
     tamaño propio, así que un click real de Playwright no puede apuntarle
-    (falla "element is not visible") — por eso se sigue disparando por JS,
-    igual que en la versión original. La diferencia acá es que se dispara la
-    secuencia completa mouseover→mousedown→mouseup→click en vez de sólo
-    "click", porque el handler de ADF que abre el panel puede estar atado a
-    mousedown y no reaccionar a un .click() sintético (que sólo emite el
-    evento "click"). Reintenta por si ADF tarda en pintar el panel."""
+    (falla "element is not visible") — por eso se dispara por JS.
+
+    En entornos SIN pantalla real (Railway/xvfb, Task Scheduler sin escritorio)
+    el menú de ADF no se despliega si sólo se dispara el evento sobre la
+    flechita, porque el handler que abre el panel puede estar en un ancestro.
+    Por eso acá se dispara la secuencia completa de eventos de mouse sobre la
+    flechita Y sobre sus ancestros inmediatos (la celda y la fila del menú),
+    replicando lo que hace un mouse real al pasar por encima. Reintenta por si
+    ADF tarda en pintar el panel."""
     menu = page.locator(menu_selector)
     link = page.get_by_text(texto_link, exact=exact)
+
+    # Dispara mouseover→mouseenter→mousedown→mouseup→click sobre el elemento
+    # y sube por la cadena de ancestros (hasta 4 niveles) disparando mouseover
+    # en cada uno, que es lo que hace que ADF marque el menu como "activo".
     disparar_eventos = (
-        "el => { const o = {bubbles: true, cancelable: true, view: window}; "
-        "el.dispatchEvent(new MouseEvent('mouseover', o)); "
-        "el.dispatchEvent(new MouseEvent('mousedown', o)); "
-        "el.dispatchEvent(new MouseEvent('mouseup', o)); "
-        "el.dispatchEvent(new MouseEvent('click', o)); }"
+        "el => {"
+        "  const o = {bubbles: true, cancelable: true, view: window};"
+        "  let node = el;"
+        "  for (let i = 0; i < 4 && node; i++) {"
+        "    node.dispatchEvent(new MouseEvent('mouseover', o));"
+        "    node.dispatchEvent(new MouseEvent('mouseenter', o));"
+        "    node = node.parentElement;"
+        "  }"
+        "  el.dispatchEvent(new MouseEvent('mousedown', o));"
+        "  el.dispatchEvent(new MouseEvent('mouseup', o));"
+        "  el.dispatchEvent(new MouseEvent('click', o));"
+        "}"
     )
+
     for intento in range(intentos):
         menu.evaluate(disparar_eventos)
         try:
             link.wait_for(state="visible", timeout=3000)
             break
         except Exception:
+            # Fallback: si el link existe en el DOM pero sigue "invisible",
+            # intentar clickearlo directamente por JS (sin esperar visibilidad).
+            # En ADF el link suele ser funcional aunque su contenedor este
+            # colapsado a 0x0 para Playwright.
+            if link.count() > 0:
+                try:
+                    link.first.evaluate("el => el.click()")
+                    logger.info(f"'{texto_link}' abierto por click JS directo (fallback).")
+                    return
+                except Exception:
+                    pass
             if intento == intentos - 1:
                 _diagnosticar_menu_cerrado(page, link, texto_link)
                 raise
