@@ -132,13 +132,49 @@ def _ejecutar_flujo_integrity(
             page.get_by_role("textbox", name="Contraseña")
         ).fill(password)
         page.get_by_role("button", name="Ingresar").click()
+
+        # Tras "Ingresar", Integrity redirige a Menu.aspx. Esa redireccion a
+        # veces tarda, y si se intenta clickear "Configuracion" antes de que
+        # el menu termine de cargar, falla con Timeout (el boton aun no existe).
+        # Por eso se espera explicitamente: primero que la navegacion a Menu
+        # termine, y luego que el boton este realmente visible, con reintentos.
         page.wait_for_load_state("networkidle", timeout=60000)
+        try:
+            page.wait_for_url("**/Menu.aspx", timeout=30000)
+        except Exception:
+            pass  # si ya estaba en Menu.aspx o la URL difiere, seguimos
 
         # -- Configuracion -> Cargar revenue ------------------------------------
         logger.info("Abriendo Configuracion -> Cargar revenue...")
-        page.get_by_role("button", name="Configuracion").or_(
+        boton_config = page.get_by_role("button", name="Configuracion").or_(
             page.get_by_role("button", name="Configuración")
-        ).click()
+        )
+        # Reintentar hasta 4 veces: esperar que el boton este visible y clickear.
+        # Cubre el caso intermitente donde el menu tarda en renderizar.
+        ultimo_error = None
+        for intento in range(4):
+            try:
+                boton_config.wait_for(state="visible", timeout=15000)
+                boton_config.click()
+                break
+            except Exception as e:
+                ultimo_error = e
+                logger.info(
+                    f"Menu aun no listo (intento {intento + 1}/4), reintentando..."
+                )
+                page.wait_for_timeout(2000)
+                # Recargar el menu por si quedo a medio cargar
+                if intento == 2:
+                    try:
+                        page.goto("https://www.programarcr.com/Conta506/Menu.aspx")
+                        page.wait_for_load_state("networkidle", timeout=30000)
+                    except Exception:
+                        pass
+        else:
+            raise RuntimeError(
+                f"No se pudo abrir 'Configuracion' tras varios intentos: {ultimo_error}"
+            )
+
         page.wait_for_timeout(1000)
         try:
             page.get_by_role("link", name="Cargar revenue").click(timeout=8000)
@@ -156,10 +192,17 @@ def _ejecutar_flujo_integrity(
         # El boton "Cargar" tiene ID exacto btnCargarAsientoJS (evita confundirlo
         # con el input de archivo que tambien matchea por accesibilidad).
         page.locator("#btnCargarAsientoJS").click()
-        page.wait_for_timeout(1500)
-        page.get_by_role("button", name="Confirmar").click()
-        page.wait_for_timeout(1500)
-        page.get_by_role("button", name="Close").click()
+
+        # "Confirmar" aparece en un dialogo que puede tardar en renderizar.
+        # Se espera a que este visible antes de clickear (evita Timeout).
+        confirmar = page.get_by_role("button", name="Confirmar")
+        confirmar.wait_for(state="visible", timeout=30000)
+        confirmar.click()
+
+        # "Close" cierra el dialogo de resultado; tambien puede tardar.
+        close_btn = page.get_by_role("button", name="Close")
+        close_btn.wait_for(state="visible", timeout=30000)
+        close_btn.click()
         page.wait_for_load_state("networkidle", timeout=60000)
         logger.info("Revenue cargado y confirmado correctamente.")
 
