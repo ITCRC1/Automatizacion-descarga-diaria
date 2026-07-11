@@ -117,7 +117,10 @@ def subir_revenue_y_descargar(
 
 
 def _guardar_diagnostico(page, carpeta_destino: Path) -> None:
-    """Al fallar, guarda screenshot + HTML de la pagina para diagnosticar despues."""
+    """Al fallar, guarda screenshot + HTML y ADEMAS loguea que pagina se estaba
+    viendo (URL, titulo y texto visible). En Railway la carpeta temporal se
+    borra, pero el log queda — y con el texto de la pagina se ve exactamente
+    que le mostro el sitio al bot (login fallido, error, otra pagina, etc.)."""
     debug_dir = carpeta_destino / "debug"
     try:
         debug_dir.mkdir(parents=True, exist_ok=True)
@@ -127,6 +130,18 @@ def _guardar_diagnostico(page, carpeta_destino: Path) -> None:
         logger.error(f"Diagnostico del error guardado en: {debug_dir}")
     except Exception as e:
         logger.error(f"No se pudo guardar el diagnostico del error: {e}")
+
+    # Volcar al log que pagina se estaba viendo (siempre, aunque falle lo anterior)
+    try:
+        logger.error(f"[DIAG] URL actual: {page.url}")
+        logger.error(f"[DIAG] Titulo: {page.title()}")
+        texto = page.locator("body").inner_text(timeout=5000)
+        # Solo los primeros 1500 caracteres, sin lineas vacias
+        lineas = [l.strip() for l in texto.splitlines() if l.strip()]
+        resumen = " | ".join(lineas)[:1500]
+        logger.error(f"[DIAG] Texto visible de la pagina: {resumen}")
+    except Exception as e:
+        logger.error(f"[DIAG] No se pudo extraer el texto de la pagina: {e}")
 
 
 def _ejecutar_flujo_integrity(
@@ -155,47 +170,14 @@ def _ejecutar_flujo_integrity(
         except Exception:
             pass  # si ya estaba en Menu.aspx o la URL difiere, seguimos
 
-        # -- Configuracion -> Cargar revenue ------------------------------------
-        # En headless (Railway) el boton "Configuracion" existe en el DOM pero
-        # Playwright lo considera "no visible" y wait_for(state="visible") nunca
-        # pasa — el mismo problema que los menus de Opera. La solucion es NO
-        # esperar visibilidad: clickear con force=True (que ignora la
-        # comprobacion de visibilidad) y, si el link no aparece, forzar un hover
-        # tambien. En local esto funciona igual que un click normal.
-        logger.info("Abriendo Configuracion -> Cargar revenue...")
-        boton_config = page.get_by_role("button", name="Configuracion").or_(
-            page.get_by_role("button", name="Configuración")
-        )
-        link_cargar = page.get_by_role("link", name="Cargar revenue")
-
-        # Esperar a que exista en el DOM (no que sea "visible")
-        boton_config.wait_for(state="attached", timeout=30000)
-
-        exito = False
-        for intento in range(4):
-            try:
-                # Click forzado: ignora la comprobacion de visibilidad de Playwright
-                boton_config.click(force=True, timeout=8000)
-                page.wait_for_timeout(800)
-                # Forzar hover para desplegar el submenu (headless no lo hace solo)
-                try:
-                    boton_config.hover(force=True, timeout=3000)
-                except Exception:
-                    pass
-                page.wait_for_timeout(800)
-                # ¿Aparecio "Cargar revenue"?
-                if link_cargar.count() > 0:
-                    link_cargar.first.click(force=True, timeout=5000)
-                    exito = True
-                    break
-            except Exception as e:
-                logger.info(f"Menu intento {intento + 1}/4 no listo, reintentando...")
-                page.wait_for_timeout(1500)
-
-        if not exito:
-            # Ultimo recurso: navegar directo por URL
-            logger.info("Menu no responde, usando navegacion directa por URL...")
-            page.goto(CARGAR_REVENUE_URL)
+        # -- Ir directo a Cargar revenue ----------------------------------------
+        # No se navega por el menu: la pagina de carga tiene URL propia y
+        # navegar directo funciona siempre. (Los logs historicos muestran que
+        # incluso en local el flujo terminaba yendo por URL: "Link directo no
+        # disponible, usando navegacion por URL..." — el menu nunca fue
+        # necesario y en headless su boton ni siquiera es localizable.)
+        logger.info("Abriendo Cargar revenue (navegacion directa)...")
+        page.goto(CARGAR_REVENUE_URL)
         page.wait_for_load_state("networkidle", timeout=60000)
 
         # -- Seleccionar y CARGAR el archivo ------------------------------------
