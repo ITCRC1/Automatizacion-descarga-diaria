@@ -80,13 +80,24 @@ def subir_revenue_y_descargar(
     archivos = []
 
     with sync_playwright() as playwright:
-        # Chromium con ventana grande para evitar descuadres en la UI
-
-        browser = playwright.chromium.launch(headless=headless, args=["--start-maximized"])
-        context = browser.new_context(
-            accept_downloads=True,
-            no_viewport=True,
-        )
+        # En modo headless (Railway) es OBLIGATORIO fijar un viewport grande:
+        # con no_viewport la ventana headless queda en tamaño minimo (~800px) y
+        # el sitio de Integrity, al ser responsive, colapsa el menu superior en
+        # un menu movil — el boton "Configuracion" ni siquiera se renderiza en
+        # el DOM y todo el flujo falla. Con 1920x1080 se muestra el layout de
+        # escritorio, igual que en la PC local. (Mismo enfoque que opera.py.)
+        if headless:
+            browser = playwright.chromium.launch(headless=True)
+            context = browser.new_context(
+                accept_downloads=True,
+                viewport={"width": 1920, "height": 1080},
+            )
+        else:
+            browser = playwright.chromium.launch(headless=False, args=["--start-maximized"])
+            context = browser.new_context(
+                accept_downloads=True,
+                no_viewport=True,
+            )
         page = context.new_page()
 
         try:
