@@ -25,5 +25,9 @@ RUN playwright install-deps chromium
 # Copiar el proyecto
 COPY . .
 
-# Correr con pantalla virtual para que Chromium funcione correctamente
-CMD ["xvfb-run", "--auto-servernum", "python", "main.py"]
+# Correr con pantalla virtual (xvfb). Se usa "sh -c" + "exec" para que
+# xvfb-run reemplace al shell y sea el proceso principal (PID 1) del
+# contenedor. Sin "exec", xvfb-run corre como subproceso y el contenedor
+# no recibe bien la señal de cierre cuando python termina, dejando la
+# ejecucion colgada en "running" indefinidamente.
+CMD ["sh", "-c", "exec xvfb-run --auto-servernum python main.py"]
