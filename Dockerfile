@@ -3,8 +3,7 @@ FROM python:3.11-slim
 # Dependencias del sistema para Playwright + pantalla virtual (xvfb)
 # Las fuentes son necesarias porque python:3.11-slim no trae ninguna: sin
 # fuentes, Chromium headless puede colapsar a 0x0 elementos cuyo tamaño
-# depende de un glyph de icon-font (como los iconos del menú de Oracle ADF),
-# aunque el elemento sea perfectamente clickeable en un navegador normal.
+# depende de un glyph de icon-font (como los iconos del menú de Oracle ADF).
 RUN apt-get update && apt-get install -y \
     xvfb \
     fontconfig \
@@ -25,9 +24,9 @@ RUN playwright install-deps chromium
 # Copiar el proyecto
 COPY . .
 
-# Correr con pantalla virtual (xvfb). Se usa "sh -c" + "exec" para que
-# xvfb-run reemplace al shell y sea el proceso principal (PID 1) del
-# contenedor. Sin "exec", xvfb-run corre como subproceso y el contenedor
-# no recibe bien la señal de cierre cuando python termina, dejando la
-# ejecucion colgada en "running" indefinidamente.
-CMD ["sh", "-c", "exec xvfb-run --auto-servernum python main.py"]
+# Dar permiso de ejecucion al script de arranque
+RUN chmod +x start.sh
+
+# Arrancar via el script (levanta Xvfb manualmente y corre python).
+# No se usa "xvfb-run" porque se cuelga al arrancar en frio en el cron.
+CMD ["sh", "start.sh"]
