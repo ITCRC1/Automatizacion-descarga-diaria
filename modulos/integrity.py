@@ -145,42 +145,46 @@ def _ejecutar_flujo_integrity(
             pass  # si ya estaba en Menu.aspx o la URL difiere, seguimos
 
         # -- Configuracion -> Cargar revenue ------------------------------------
+        # En headless (Railway) el boton "Configuracion" existe en el DOM pero
+        # Playwright lo considera "no visible" y wait_for(state="visible") nunca
+        # pasa — el mismo problema que los menus de Opera. La solucion es NO
+        # esperar visibilidad: clickear con force=True (que ignora la
+        # comprobacion de visibilidad) y, si el link no aparece, forzar un hover
+        # tambien. En local esto funciona igual que un click normal.
         logger.info("Abriendo Configuracion -> Cargar revenue...")
         boton_config = page.get_by_role("button", name="Configuracion").or_(
             page.get_by_role("button", name="Configuración")
         )
-        # Reintentar hasta 4 veces: esperar que el boton este visible y clickear.
-        # Cubre el caso intermitente donde el menu tarda en renderizar.
-        ultimo_error = None
+        link_cargar = page.get_by_role("link", name="Cargar revenue")
+
+        # Esperar a que exista en el DOM (no que sea "visible")
+        boton_config.wait_for(state="attached", timeout=30000)
+
+        exito = False
         for intento in range(4):
             try:
-                boton_config.wait_for(state="visible", timeout=15000)
-                boton_config.click()
-                break
+                # Click forzado: ignora la comprobacion de visibilidad de Playwright
+                boton_config.click(force=True, timeout=8000)
+                page.wait_for_timeout(800)
+                # Forzar hover para desplegar el submenu (headless no lo hace solo)
+                try:
+                    boton_config.hover(force=True, timeout=3000)
+                except Exception:
+                    pass
+                page.wait_for_timeout(800)
+                # ¿Aparecio "Cargar revenue"?
+                if link_cargar.count() > 0:
+                    link_cargar.first.click(force=True, timeout=5000)
+                    exito = True
+                    break
             except Exception as e:
-                ultimo_error = e
-                logger.info(
-                    f"Menu aun no listo (intento {intento + 1}/4), reintentando..."
-                )
-                page.wait_for_timeout(2000)
-                # Recargar el menu por si quedo a medio cargar
-                if intento == 2:
-                    try:
-                        page.goto("https://www.programarcr.com/Conta506/Menu.aspx")
-                        page.wait_for_load_state("networkidle", timeout=30000)
-                    except Exception:
-                        pass
-        else:
-            raise RuntimeError(
-                f"No se pudo abrir 'Configuracion' tras varios intentos: {ultimo_error}"
-            )
+                logger.info(f"Menu intento {intento + 1}/4 no listo, reintentando...")
+                page.wait_for_timeout(1500)
 
-        page.wait_for_timeout(1000)
-        try:
-            page.get_by_role("link", name="Cargar revenue").click(timeout=8000)
-        except Exception:
-            logger.info("Link directo no disponible, usando navegacion por URL...")
-        page.goto(CARGAR_REVENUE_URL)
+        if not exito:
+            # Ultimo recurso: navegar directo por URL
+            logger.info("Menu no responde, usando navegacion directa por URL...")
+            page.goto(CARGAR_REVENUE_URL)
         page.wait_for_load_state("networkidle", timeout=60000)
 
         # -- Seleccionar y CARGAR el archivo ------------------------------------
