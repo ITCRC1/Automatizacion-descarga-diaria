@@ -49,9 +49,60 @@ def _fill(color):
 
 
 def _leer_detalle(path: Path, restaurante: str) -> pd.DataFrame:
-    """Lee un archivo de detalle de ORS (Corcovado o Terra Kitchen)."""
+    """
+    Lee un archivo de detalle de ORS (Corcovado o Terra Kitchen).
+
+    Si el archivo viene vacio (el local no tuvo ventas ese dia), ORS
+    descarga un Excel con solo unas pocas filas de encabezado y sin la
+    tabla de datos. En ese caso pd.read_excel(header=6) falla porque no
+    llega a la fila 6. Para que el proceso no se caiga, se detecta esa
+    situacion y se devuelve un DataFrame vacio con las columnas que el
+    resto del codigo espera. Los totales de ese local quedan en cero.
+    """
+    columnas_esperadas = [
+        "Check Number",
+        "Payment Amount",
+        "Tender Type",
+        "Check Subtotal",
+        "Transaction Employee",
+        "Check Closed Date and Time",
+    ]
+
+    def _vacio() -> pd.DataFrame:
+        df = pd.DataFrame(columns=columnas_esperadas)
+        df["Payment Amount"] = df["Payment Amount"].astype(float)
+        df["Check Subtotal"] = df["Check Subtotal"].astype(float)
+        df["Restaurante"] = restaurante
+        return df
+
+    # Chequeo previo: si la hoja no llega a la fila 7 (indice 6), no hay tabla.
+    try:
+        crudo = pd.read_excel(path, sheet_name="Reports", header=None)
+    except Exception as e:
+        logger.warning(f"{restaurante}: no se pudo leer {path.name} ({e}). Se toma como vacio.")
+        return _vacio()
+
+    if len(crudo) <= 6:
+        logger.warning(
+            f"{restaurante}: el reporte no tiene datos "
+            f"({len(crudo)} filas). Se consolida con ceros."
+        )
+        return _vacio()
+
     df = pd.read_excel(path, sheet_name="Reports", header=6)
+
+    if "Check Number" not in df.columns:
+        logger.warning(
+            f"{restaurante}: no se encontro la columna 'Check Number'. "
+            "Se consolida con ceros."
+        )
+        return _vacio()
+
     df = df[df["Check Number"].notna()].copy()
+
+    if df.empty:
+        logger.warning(f"{restaurante}: sin checks registrados. Se consolida con ceros.")
+
     df["Restaurante"] = restaurante
     return df
 
