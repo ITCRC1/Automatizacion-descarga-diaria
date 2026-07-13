@@ -103,40 +103,20 @@ def descargar_reportes_ors(carpeta_destino: Path, headless: bool = False) -> lis
         # ---- Reporte 1: general, sin filtro de local ----
         logger.info("Descargando reporte general...")
         page.locator("#link_100357").click()
-        # El click navega a la pagina del reporte: darle una espera de carga.
-        # Va protegida con try/except porque los dashboards de Oracle suelen
-        # tener actividad de red constante y "networkidle" podria no cumplirse
-        # nunca; si expira, se sigue igual (los clicks ya auto-esperan).
-        try:
-            page.wait_for_load_state("networkidle", timeout=15000)
-        except Exception:
-            pass
-        logger.info("  [ORS] abriendo Edit Parameters...")
         page.get_by_role("button", name="Edit Parameters").click()
-        logger.info("  [ORS] abriendo Advanced Business Dates...")
         page.get_by_role("link", name="Advanced Business Dates").click()
-        logger.info("  [ORS] seleccionando fecha...")
         page.get_by_role("link", name=numero_dia, description=descripcion_dia, exact=True).click()
-        logger.info("  [ORS] aplicando fecha...")
         page.get_by_role("button", name="Apply").click()
-        logger.info("  [ORS] ejecutando Run...")
         page.get_by_role("button", name="Run").click()
-        logger.info("  [ORS] abriendo Download...")
         page.get_by_role("button", name="Download").click()
         with page.expect_download() as descarga_info:
             page.get_by_role("menuitem", name="Microsoft Excel (.xlsx)").click()
         archivos_guardados.append(_guardar_descarga(descarga_info.value, carpeta_destino, "ORS_General", fecha_str))
 
         # ---- Reporte 2: My Reports, un local a la vez ----
-        logger.info("  [ORS] abriendo My Reports...")
         page.get_by_role("tab", name="Dashboard").click()
         page.get_by_role("tab", name="My Reports").click()
         page.locator("#link_17202").click()
-        try:
-            page.wait_for_load_state("networkidle", timeout=15000)
-        except Exception:
-            pass
-        logger.info("  [ORS] My Reports cargado, configurando fecha...")
         page.get_by_role("link", name="Advanced Business Dates").click()
         page.get_by_role("link", name=numero_dia, description=descripcion_dia, exact=True).click()
         page.get_by_role("button", name="Apply").click()
@@ -151,7 +131,6 @@ def descargar_reportes_ors(carpeta_destino: Path, headless: bool = False) -> lis
                 page.get_by_text(local, exact=True).click()
             else:
                 page.get_by_text(local).click()
-            logger.info(f"  [ORS] local {local} listo, ejecutando Run...")
             page.get_by_role("button", name="Run").click()
             page.get_by_role("button", name="Download").click()
             with page.expect_download() as descarga_info:
