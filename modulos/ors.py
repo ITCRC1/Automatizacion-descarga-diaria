@@ -84,6 +84,11 @@ def descargar_reportes_ors(carpeta_destino: Path, headless: bool = False) -> lis
         browser = playwright.chromium.launch(headless=headless, args=["--start-maximized"])
         context = browser.new_context(accept_downloads=True, no_viewport=True)
         page = context.new_page()
+        # Timeout global para acciones (click, fill, etc.): si un elemento no
+        # esta listo en 45s, se lanza un error claro en vez de colgarse para
+        # siempre. En headless algunos clicks de ORS podian quedar esperando
+        # indefinidamente sin este limite.
+        page.set_default_timeout(45000)
 
         logger.info("Iniciando login en ORS...")
         page.goto(ORS_URL)
