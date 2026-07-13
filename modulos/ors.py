@@ -84,10 +84,8 @@ def descargar_reportes_ors(carpeta_destino: Path, headless: bool = False) -> lis
         browser = playwright.chromium.launch(headless=headless, args=["--start-maximized"])
         context = browser.new_context(accept_downloads=True, no_viewport=True)
         page = context.new_page()
-        # Timeout global para acciones (click, fill, etc.): si un elemento no
-        # esta listo en 45s, se lanza un error claro en vez de colgarse para
-        # siempre. En headless algunos clicks de ORS podian quedar esperando
-        # indefinidamente sin este limite.
+        # Timeout global: ningun click/espera se cuelga mas de 45s; si algo no
+        # esta listo, lanza error claro en vez de quedarse pegado para siempre.
         page.set_default_timeout(45000)
 
         logger.info("Iniciando login en ORS...")
@@ -107,7 +105,21 @@ def descargar_reportes_ors(carpeta_destino: Path, headless: bool = False) -> lis
 
         # ---- Reporte 1: general, sin filtro de local ----
         logger.info("Descargando reporte general...")
-        page.locator("#link_100357").click()
+        try:
+            page.locator("#link_100357").click()
+        except Exception:
+            # Diagnostico: que pagina esta viendo ORS cuando falla el primer click
+            try:
+                logger.error(f"[DIAG-ORS] URL: {page.url}")
+                logger.error(f"[DIAG-ORS] Titulo: {page.title()}")
+                txt = page.locator("body").inner_text(timeout=5000)
+                lineas = [l.strip() for l in txt.splitlines() if l.strip()]
+                logger.error(f"[DIAG-ORS] Texto: {' | '.join(lineas)[:1200]}")
+                # Cuantos elementos con ese id/rol hay
+                logger.error(f"[DIAG-ORS] #link_100357 en DOM: {page.locator('#link_100357').count()}")
+            except Exception as diag_e:
+                logger.error(f"[DIAG-ORS] No se pudo diagnosticar: {diag_e}")
+            raise
         page.get_by_role("button", name="Edit Parameters").click()
         page.get_by_role("link", name="Advanced Business Dates").click()
         page.get_by_role("link", name=numero_dia, description=descripcion_dia, exact=True).click()
