@@ -408,20 +408,31 @@ def descargar_opera(carpeta_destino: Path, headless: bool = False) -> list[Path]
 
             # Abrir el menú ⋮ de la primera fila para que aparezca "Download".
             # Primero verificamos si "Download" ya está visible (a veces el menú
-            # quedó abierto); si no, clickeamos el ⋮ con reintentos.
+            # quedó abierto); si no, clickeamos el ⋮ con reintentos. En headless
+            # el click normal a veces no dispara el menú (mismo problema que
+            # Manage Reports/Exports), asi que se agrega force=True y, si sigue
+            # sin aparecer, un click JS directo como ultimo recurso por intento.
             download_link = page.get_by_role("link", name="Download")
             if not download_link.is_visible():
                 menu_btn = page.locator(LINK_DL).first
-                for intento in range(4):
+                for intento in range(6):
                     try:
                         menu_btn.scroll_into_view_if_needed(timeout=5000)
-                        menu_btn.click(timeout=5000)
+                        menu_btn.click(force=True, timeout=5000)
                     except Exception:
                         pass  # el menú pudo abrirse igual, verificamos abajo
                     page.wait_for_timeout(1200)
                     if download_link.is_visible():
                         break
-                    if intento == 3:
+                    # Fallback: click JS directo si el click normal no abrio el menu
+                    try:
+                        menu_btn.evaluate("el => el.click()")
+                        page.wait_for_timeout(1200)
+                    except Exception:
+                        pass
+                    if download_link.is_visible():
+                        break
+                    if intento == 5:
                         raise RuntimeError(f"No apareció 'Download' para {prefijo}")
                     page.wait_for_timeout(1000)
 
