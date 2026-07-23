@@ -91,8 +91,11 @@ def descargar_reportes_ors(carpeta_destino: Path, headless: bool = False) -> lis
         logger.info("Iniciando login en ORS...")
         page.goto(ORS_URL)
         page.wait_for_load_state("networkidle", timeout=60000)  # esperar que el OIDC cargue el formulario
+        # El login ahora es en dos pasos: primero usuario + enterprise, "Next",
+        # y recién ahí aparece el campo de contraseña (antes estaba todo junto).
         page.get_by_role("textbox", name="Email or User Name").fill(usuario)
         page.get_by_role("textbox", name="Enterprise Name").fill(enterprise)
+        page.get_by_role("button", name="Next").click()
         page.get_by_role("textbox", name="Password").fill(password)
         # Sign In redirige a Oracle SSO y de vuelta a ORS — la navegación puede causar
         # "Target page closed". Usamos dispatch_event para no esperar el click completo
