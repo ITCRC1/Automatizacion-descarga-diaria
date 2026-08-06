@@ -30,7 +30,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 INTEGRITY_URL = "https://www.programarcr.com/conta506/index.aspx"
-CARGAR_REVENUE_URL = "https://www.programarcr.com/Conta506/forms/frmParametros_OperaCargarRevenue.aspx"
+CARGAR_REVENUE_URL = "https://www.programarcr.com/Conta506/forms/7_configuracion/1_opera/frmParametros_OperaCargarRevenue.aspx"
 
 
 def _guardar(descarga, carpeta: Path, prefijo: str, fecha_str: str) -> Path:
@@ -190,36 +190,18 @@ def _ejecutar_flujo_integrity(
         # con el input de archivo que tambien matchea por accesibilidad).
         page.locator("#btnCargarAsientoJS").click()
 
-        # "Confirmar" aparece en un dialogo SOLO cuando la carga es nueva. Si el
-        # revenue de esta fecha YA se cargo antes (re-corrida del mismo dia),
-        # Integrity no muestra ese dialogo y esperar "Confirmar" falla con
-        # Timeout. Eso NO es un error real: el asiento ya existe de la carga
-        # anterior, asi que se continua directo a buscarlo y descargarlo.
+        # "Confirmar" aparece en un dialogo que puede tardar en renderizar.
+        # Se espera a que este visible antes de clickear (evita Timeout).
         confirmar = page.get_by_role("button", name="Confirmar")
-        try:
-            confirmar.wait_for(state="visible", timeout=20000)
-            confirmar.click()
-            close_btn = page.get_by_role("button", name="Close")
-            close_btn.wait_for(state="visible", timeout=20000)
-            close_btn.click()
-            page.wait_for_load_state("networkidle", timeout=60000)
-            logger.info("Revenue cargado y confirmado correctamente.")
-        except Exception:
-            logger.warning(
-                "No aparecio 'Confirmar' — el revenue de esta fecha ya estaba "
-                "cargado (re-corrida del mismo dia). Se continua a buscar el "
-                "asiento existente."
-            )
-            for cerrar in ("Close", "Cerrar"):
-                try:
-                    page.get_by_role("button", name=cerrar).click(timeout=2000)
-                except Exception:
-                    pass
-            try:
-                page.keyboard.press("Escape")
-            except Exception:
-                pass
-            page.wait_for_timeout(1000)
+        confirmar.wait_for(state="visible", timeout=30000)
+        confirmar.click()
+
+        # "Close" cierra el dialogo de resultado; tambien puede tardar.
+        close_btn = page.get_by_role("button", name="Close")
+        close_btn.wait_for(state="visible", timeout=30000)
+        close_btn.click()
+        page.wait_for_load_state("networkidle", timeout=60000)
+        logger.info("Revenue cargado y confirmado correctamente.")
 
         # -- Buscar el asiento OPL del dia --------------------------------------
         logger.info(f"Buscando asiento: {descripcion_busqueda}...")
