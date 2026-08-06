@@ -143,6 +143,23 @@ def _guardar_diagnostico(page, carpeta_destino: Path) -> None:
     except Exception as e:
         logger.error(f"[DIAG] No se pudo extraer el texto de la pagina: {e}")
 
+    # Listar los botones/inputs reales del DOM con su id y texto. Cuando el
+    # sitio cambia, esto muestra de una que selector hay que usar en vez de
+    # tener que adivinar por que un click "no hizo nada".
+    try:
+        controles = page.evaluate(
+            "() => Array.from(document.querySelectorAll('button, input[type=button], "
+            "input[type=submit], input[type=file], a.btn')).map(el => ({"
+            "tag: el.tagName, id: el.id, tipo: el.type || '', "
+            "texto: (el.innerText || el.value || '').trim().slice(0, 60), "
+            "visible: !!(el.offsetWidth || el.offsetHeight)}))"
+        )
+        logger.error(f"[DIAG] Controles en la pagina ({len(controles)}):")
+        for ctrl in controles:
+            logger.error(f"[DIAG]   {ctrl}")
+    except Exception as e:
+        logger.error(f"[DIAG] No se pudieron listar los controles: {e}")
+
 
 def _ejecutar_flujo_integrity(
     page, usuario, password, archivo_revenue_xml,
@@ -186,9 +203,13 @@ def _ejecutar_flujo_integrity(
         page.wait_for_timeout(1000)
 
         # Confirmar la carga: Cargar -> Confirmar -> Close
-        # El boton "Cargar" tiene ID exacto btnCargarAsientoJS (evita confundirlo
-        # con el input de archivo que tambien matchea por accesibilidad).
-        page.locator("#btnCargarAsientoJS").click()
+        # Se busca por rol y nombre exacto "Cargar": exact=True hace match de
+        # cadena completa (recortando espacios), asi NO matchea el boton de
+        # seleccion de archivo "Cargar revenue", que es la ambiguedad que antes
+        # se evitaba usando el ID #btnCargarAsientoJS. Ese ID dejo de servir:
+        # el click no daba error pero tampoco enviaba el formulario, asi que
+        # apunta a otro elemento desde que rediseñaron la pagina.
+        page.get_by_role("button", name="Cargar", exact=True).click()
 
         # "Confirmar" aparece en un dialogo que puede tardar en renderizar.
         # Se espera a que este visible antes de clickear (evita Timeout).
