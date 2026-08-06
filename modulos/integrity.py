@@ -100,6 +100,16 @@ def subir_revenue_y_descargar(
             )
         page = context.new_page()
 
+        # Playwright descarta solo los dialogos nativos (confirm/alert) cuando
+        # corre como script — no asi al grabar con codegen, donde los responde
+        # la persona. Si Integrity lanza un confirm() nativo al cargar, sin
+        # este handler se cancelaria en silencio y el flujo quedaria trabado
+        # esperando un modal que nunca llega.
+        page.on("dialog", lambda dialogo: (
+            logger.info(f"Dialogo nativo aceptado: {dialogo.message[:200]}"),
+            dialogo.accept(),
+        ))
+
         try:
             _ejecutar_flujo_integrity(
                 page, usuario, password, archivo_revenue_xml,
@@ -203,17 +213,19 @@ def _ejecutar_flujo_integrity(
         page.wait_for_timeout(1000)
 
         # Confirmar la carga: Cargar -> Confirmar -> Close
-        # Se busca por rol y nombre exacto "Cargar": exact=True hace match de
-        # cadena completa (recortando espacios), asi NO matchea el boton de
-        # seleccion de archivo "Cargar revenue", que es la ambiguedad que antes
-        # se evitaba usando el ID #btnCargarAsientoJS. Ese ID dejo de servir:
-        # el click no daba error pero tampoco enviaba el formulario, asi que
-        # apunta a otro elemento desde que rediseñaron la pagina.
-        page.get_by_role("button", name="Cargar", exact=True).click()
+        # El boton "Cargar" se ubica por ID exacto btnCargarAsientoJS. NO usar
+        # get_by_role(name="Cargar"): su nombre accesible arranca con el glifo
+        # del icono, asi que exact=True no matchea y sin exact matchea tambien
+        # el boton de archivo "Cargar revenue" (violacion de modo estricto).
+        page.locator("#btnCargarAsientoJS").click()
 
         # "Confirmar" aparece en un dialogo que puede tardar en renderizar.
-        # Se espera a que este visible antes de clickear (evita Timeout).
-        confirmar = page.get_by_role("button", name="Confirmar")
+        # Se acepta boton, link o input porque el modal no siempre usa <button>.
+        confirmar = page.get_by_role("button", name="Confirmar").or_(
+            page.get_by_role("link", name="Confirmar")
+        ).or_(
+            page.locator("input[value='Confirmar' i]")
+        ).first
         confirmar.wait_for(state="visible", timeout=30000)
         confirmar.click()
 
