@@ -257,7 +257,11 @@ def _ejecutar_flujo_integrity(
         page.wait_for_timeout(800)
         with page.expect_download() as dl_info:
             with page.expect_popup() as popup_info:
-                page.get_by_text("Generar excel").click()
+                # Se busca DENTRO de la fila, no en toda la pagina: cada asiento
+                # tiene su propio "Generar excel", asi que buscarlo global falla
+                # por modo estricto en cuanto hay mas de un asiento con la misma
+                # descripcion (y podria bajar el Excel del asiento equivocado).
+                fila.get_by_text("Generar excel").click()
             popup_info.value.close()
         archivos.append(_guardar(dl_info.value, carpeta_destino, "INTEGRITY_OPL", fecha_str))
 
