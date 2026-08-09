@@ -208,9 +208,25 @@ def _ejecutar_flujo_integrity(
         page.wait_for_load_state("networkidle", timeout=60000)
 
         # -- Seleccionar y CARGAR el archivo ------------------------------------
+        # Se apunta al <input type=file> real (#fuPlantilla), NO al boton
+        # "Cargar revenue" por rol: ese boton no es el input ni su <label>, asi
+        # que adjuntar ahi funcionaba de casualidad — algunos dias el archivo
+        # quedaba adjunto y otros no, y ese era el origen de la intermitencia.
         logger.info(f"Cargando archivo: {archivo_revenue_xml.name}...")
-        page.get_by_role("button", name="Cargar revenue").set_input_files(str(archivo_revenue_xml))
-        page.wait_for_timeout(1000)
+        input_archivo = page.locator("#fuPlantilla")
+        input_archivo.wait_for(state="attached", timeout=30000)
+        input_archivo.set_input_files(str(archivo_revenue_xml))
+
+        # Verificar que el archivo QUEDO adjunto antes de seguir. Sin esto, si
+        # el adjunto falla el sitio no hace nada al clickear "Cargar" y el error
+        # aparece 30s despues como "no aparecio Confirmar", que no dice nada
+        # sobre la causa real.
+        valor_input = input_archivo.evaluate("el => el.value")
+        if not valor_input:
+            raise RuntimeError(
+                f"El archivo no quedo adjunto en #fuPlantilla: {archivo_revenue_xml}"
+            )
+        logger.info(f"Archivo adjunto correctamente: {valor_input}")
 
         # Confirmar la carga: Cargar -> Confirmar -> Close
         # El boton "Cargar" se ubica por ID exacto btnCargarAsientoJS. NO usar
