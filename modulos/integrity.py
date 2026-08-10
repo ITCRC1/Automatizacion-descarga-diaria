@@ -110,6 +110,23 @@ def subir_revenue_y_descargar(
             dialogo.accept(),
         ))
 
+        # Instrumentacion: cuando un click "no hace nada" la causa suele estar
+        # en un error de JS o en una peticion que fallo, cosas invisibles desde
+        # el DOM. Se loguean para no tener que deducirlas a ciegas.
+        page.on("pageerror", lambda err: logger.error(f"[JS-ERROR] {str(err)[:300]}"))
+        page.on("console", lambda msg: (
+            logger.error(f"[JS-CONSOLE-{msg.type}] {msg.text[:300]}")
+            if msg.type in ("error", "warning") else None
+        ))
+        page.on("requestfailed", lambda req: logger.error(
+            f"[RED-FALLIDA] {req.method} {req.url[:200]} — {req.failure}"
+        ))
+        page.on("response", lambda resp: (
+            logger.error(f"[HTTP-{resp.status}] {resp.request.method} {resp.url[:200]}")
+            if resp.status >= 400 else None
+        ))
+        page.on("load", lambda p: logger.info(f"[NAV] Pagina (re)cargada: {p.url[:200]}"))
+
         try:
             _ejecutar_flujo_integrity(
                 page, usuario, password, archivo_revenue_xml,
@@ -228,12 +245,28 @@ def _ejecutar_flujo_integrity(
             )
         logger.info(f"Archivo adjunto correctamente: {valor_input}")
 
+        # Pausa antes de clickear "Cargar": el sitio parece subir el archivo por
+        # AJAX al detectar el change del input, y clickear de inmediato (96 ms)
+        # es clickear antes de que termine. La corrida que funciono tenia ~3,5 s
+        # entre adjuntar y clickear; sin esta pausa el boton no hace efecto.
+        page.wait_for_timeout(3000)
+
         # Confirmar la carga: Cargar -> Confirmar -> Close
         # El boton "Cargar" se ubica por ID exacto btnCargarAsientoJS. NO usar
         # get_by_role(name="Cargar"): su nombre accesible arranca con el glifo
         # del icono, asi que exact=True no matchea y sin exact matchea tambien
         # el boton de archivo "Cargar revenue" (violacion de modo estricto).
         page.locator("#btnCargarAsientoJS").click()
+
+        # Chequeo temprano: si tras el click el input quedo vacio, hubo un
+        # postback/recarga que descarto el archivo, y esperar "Confirmar" 30s
+        # solo tapa el problema real. Se reporta al toque y con la causa.
+        page.wait_for_timeout(2000)
+        try:
+            valor_post_click = input_archivo.evaluate("el => el.value")
+        except Exception:
+            valor_post_click = "<input ya no existe en el DOM>"
+        logger.info(f"Estado de #fuPlantilla tras clickear Cargar: '{valor_post_click}'")
 
         # "Confirmar" aparece en un dialogo que puede tardar en renderizar.
         # Se acepta boton, link o input porque el modal no siempre usa <button>.
