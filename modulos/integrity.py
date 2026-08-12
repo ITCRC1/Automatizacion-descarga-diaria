@@ -256,7 +256,28 @@ def _ejecutar_flujo_integrity(
         # get_by_role(name="Cargar"): su nombre accesible arranca con el glifo
         # del icono, asi que exact=True no matchea y sin exact matchea tambien
         # el boton de archivo "Cargar revenue" (violacion de modo estricto).
-        page.locator("#btnCargarAsientoJS").click()
+        # Se captura la peticion POST que dispara el click junto con la respuesta
+        # del servidor. Es el unico dato que faltaba: el JS corre sin errores y
+        # limpia el input (o sea, proceso el archivo), pero el modal no aparece,
+        # asi que la explicacion tiene que estar en lo que contesta el servidor.
+        respuesta_upload = None
+        try:
+            with page.expect_response(
+                lambda r: r.request.method == "POST", timeout=20000
+            ) as resp_info:
+                page.locator("#btnCargarAsientoJS").click()
+            respuesta_upload = resp_info.value
+        except Exception as e:
+            logger.error(f"[UPLOAD] No se detecto ninguna peticion POST tras el click: {e}")
+
+        if respuesta_upload is not None:
+            logger.info(
+                f"[UPLOAD] POST {respuesta_upload.url[:200]} -> HTTP {respuesta_upload.status}"
+            )
+            try:
+                logger.info(f"[UPLOAD] Respuesta del servidor: {respuesta_upload.text()[:1000]}")
+            except Exception as e:
+                logger.info(f"[UPLOAD] No se pudo leer el cuerpo de la respuesta: {e}")
 
         # Chequeo temprano: si tras el click el input quedo vacio, hubo un
         # postback/recarga que descarto el archivo, y esperar "Confirmar" 30s
@@ -268,22 +289,32 @@ def _ejecutar_flujo_integrity(
             valor_post_click = "<input ya no existe en el DOM>"
         logger.info(f"Estado de #fuPlantilla tras clickear Cargar: '{valor_post_click}'")
 
-        # "Confirmar" aparece en un dialogo que puede tardar en renderizar.
-        # Se acepta boton, link o input porque el modal no siempre usa <button>.
+        # Confirmar / Close son OPCIONALES: la carga se completa sola con el
+        # click en "Cargar" (lo prueban los asientos que quedaban creados en
+        # corridas que "fallaban" justo aca). El modal no siempre aparece, asi
+        # que exigirlo bloqueaba todo el flujo — incluida la descarga, que es
+        # lo unico que faltaba — esperando algo que no llega.
         confirmar = page.get_by_role("button", name="Confirmar").or_(
             page.get_by_role("link", name="Confirmar")
         ).or_(
             page.locator("input[value='Confirmar' i]")
         ).first
-        confirmar.wait_for(state="visible", timeout=30000)
-        confirmar.click()
+        try:
+            confirmar.wait_for(state="visible", timeout=10000)
+            confirmar.click()
+            logger.info("Modal de confirmacion aceptado.")
+        except Exception:
+            logger.info("No aparecio el modal de confirmacion; la carga se completo sola.")
 
-        # "Close" cierra el dialogo de resultado; tambien puede tardar.
         close_btn = page.get_by_role("button", name="Close")
-        close_btn.wait_for(state="visible", timeout=30000)
-        close_btn.click()
+        try:
+            close_btn.wait_for(state="visible", timeout=5000)
+            close_btn.click()
+        except Exception:
+            pass  # sin modal no hay nada que cerrar
+
         page.wait_for_load_state("networkidle", timeout=60000)
-        logger.info("Revenue cargado y confirmado correctamente.")
+        logger.info("Revenue cargado correctamente.")
 
         # -- Buscar el asiento OPL del dia --------------------------------------
         logger.info(f"Buscando asiento: {descripcion_busqueda}...")
@@ -311,8 +342,16 @@ def _ejecutar_flujo_integrity(
                 # por modo estricto en cuanto hay mas de un asiento con la misma
                 # descripcion (y podria bajar el Excel del asiento equivocado).
                 fila.get_by_text("Generar excel").click()
-            popup_info.value.close()
-        archivos.append(_guardar(dl_info.value, carpeta_destino, "INTEGRITY_OPL", fecha_str))
+            popup = popup_info.value
+
+        # El popup es el que ejecuta la descarga: se cierra DESPUES de que el
+        # archivo termino de bajar. Cerrarlo antes (como estaba) puede abortarla.
+        descarga = dl_info.value
+        try:
+            popup.close()
+        except Exception:
+            pass  # el popup pudo cerrarse solo al terminar la descarga
+        archivos.append(_guardar(descarga, carpeta_destino, "INTEGRITY_OPL", fecha_str))
 
 
 if __name__ == "__main__":
