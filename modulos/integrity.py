@@ -335,13 +335,22 @@ def _ejecutar_flujo_integrity(
         fila = page.get_by_role("row", name="OPL - Ingresos Opera/").last
         fila.locator("#dropdownMenuButton").click()
         page.wait_for_timeout(800)
+        # "Generar excel" se busca DENTRO de la fila: cada asiento tiene el suyo,
+        # y buscarlo global falla por modo estricto cuando hay duplicados (ademas
+        # de arriesgar bajar el Excel del asiento equivocado). Si el menu se
+        # renderiza fuera del <tr> — Bootstrap a veces lo cuelga del body — no
+        # habria coincidencias dentro de la fila; en ese caso se cae al ultimo
+        # del documento, que corresponde a la misma fila elegida con .last.
+        generar_excel = fila.get_by_text("Generar excel")
+        if generar_excel.count() == 0:
+            logger.info("El menu no esta dentro de la fila; usando el ultimo del documento.")
+            generar_excel = page.get_by_text("Generar excel").last
+        else:
+            generar_excel = generar_excel.first
+
         with page.expect_download() as dl_info:
             with page.expect_popup() as popup_info:
-                # Se busca DENTRO de la fila, no en toda la pagina: cada asiento
-                # tiene su propio "Generar excel", asi que buscarlo global falla
-                # por modo estricto en cuanto hay mas de un asiento con la misma
-                # descripcion (y podria bajar el Excel del asiento equivocado).
-                fila.get_by_text("Generar excel").click()
+                generar_excel.click()
             popup = popup_info.value
 
         # El popup es el que ejecuta la descarga: se cierra DESPUES de que el
