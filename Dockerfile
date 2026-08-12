@@ -9,7 +9,15 @@ RUN apt-get update && apt-get install -y \
     fontconfig \
     fonts-liberation \
     fonts-dejavu-core \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
+
+# Zona horaria de Costa Rica (UTC-6). Sin esto el contenedor corre en UTC y,
+# entre las 18:00 y la medianoche local, datetime.now() ya devuelve el dia
+# siguiente: el proceso calcula mal "ayer" y busca reportes de una fecha que
+# todavia no existe. Afecta a todos los modulos, no solo a integrity.
+ENV TZ=America/Costa_Rica
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
 WORKDIR /app
 

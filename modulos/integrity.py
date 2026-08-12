@@ -19,6 +19,7 @@ Credenciales esperadas en .env:
 
 import os
 import logging
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -31,6 +32,26 @@ logger = logging.getLogger(__name__)
 
 INTEGRITY_URL = "https://www.programarcr.com/conta506/index.aspx"
 CARGAR_REVENUE_URL = "https://www.programarcr.com/Conta506/forms/7_configuracion/1_opera/frmParametros_OperaCargarRevenue.aspx"
+
+
+def _fecha_negocio_del_xml(ruta: Path):
+    """Lee la fecha de negocio del XML de revenue, que viene en el atributo
+    date de la raiz: <revenue hotel_code="COWLCR" date="YYYY-MM-DD">.
+
+    Hace falta porque el nombre del archivo NO garantiza el dia de los datos:
+    si el proceso corre de madrugada, antes del night audit de Opera, el
+    export todavia trae el dia anterior. Y el asiento en Integrity se nombra
+    segun la fecha de los datos, no segun la del archivo.
+
+    Devuelve datetime o None si no se pudo leer.
+    """
+    try:
+        for _, elem in ET.iterparse(str(ruta), events=("start",)):
+            valor = elem.get("date")
+            return datetime.strptime(valor, "%Y-%m-%d") if valor else None
+    except Exception as e:
+        logger.warning(f"No se pudo leer la fecha del XML {ruta.name}: {e}")
+    return None
 
 
 def _guardar(descarga, carpeta: Path, prefijo: str, fecha_str: str) -> Path:
@@ -74,7 +95,19 @@ def subir_revenue_y_descargar(
     if fecha_reporte is None:
         fecha_reporte = datetime.now() - timedelta(days=1)
     fecha_str = fecha_reporte.strftime("%Y-%m-%d")
-    fecha_busqueda = fecha_reporte.strftime("%d/%m/%Y")          # DD/MM/YYYY para el filtro
+
+    # El asiento se busca por la fecha de los DATOS (la que trae el XML), no por
+    # la del nombre del archivo ni por "ayer": si el proceso corre antes del
+    # night audit, Opera exporta el dia anterior y buscar por "ayer" no
+    # encuentra nada. El nombre del archivo descargado sigue usando fecha_str
+    # para no romper la estructura de carpetas que arma main.py.
+    fecha_datos = _fecha_negocio_del_xml(archivo_revenue_xml) or fecha_reporte
+    if fecha_datos.date() != fecha_reporte.date():
+        logger.warning(
+            f"El XML contiene datos del {fecha_datos:%d/%m/%Y}, no del "
+            f"{fecha_reporte:%d/%m/%Y}. Se busca el asiento por la fecha de los datos."
+        )
+    fecha_busqueda = fecha_datos.strftime("%d/%m/%Y")             # DD/MM/YYYY para el filtro
     descripcion_busqueda = f"OPL - Ingresos Opera/Simphony {fecha_busqueda}"
 
     archivos = []
@@ -328,8 +361,18 @@ def _ejecutar_flujo_integrity(
         buscador.press("Enter")
         page.wait_for_timeout(2000)
 
+        # Si la busqueda no devolvio filas, cortar con un error que diga QUE se
+        # busco. Sin esto el sintoma era un timeout de 30s sobre el menu de una
+        # fila inexistente, que no dice nada sobre la causa.
+        filas = page.get_by_role("row", name="OPL - Ingresos Opera/")
+        if filas.count() == 0:
+            raise RuntimeError(
+                f"No se encontro ningun asiento '{descripcion_busqueda}' en Integrity. "
+                "Revisa que la carga del revenue haya generado el asiento de esa fecha."
+            )
+
         # -- Descargar el Excel del asiento -------------------------------------
-        logger.info("Descargando Excel del asiento...")
+        logger.info(f"Descargando Excel del asiento ({filas.count()} fila(s) encontrada(s))...")
         # Puede haber mas de un asiento cuyo nombre contenga esta descripcion
         # (p.ej. un duplicado de un intento anterior). Se toma el mas reciente.
         fila = page.get_by_role("row", name="OPL - Ingresos Opera/").last
