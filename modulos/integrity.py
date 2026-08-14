@@ -226,24 +226,27 @@ def _ejecutar_flujo_integrity(
     descripcion_busqueda, carpeta_destino, fecha_str, archivos,
 ) -> None:
         # -- Login --------------------------------------------------------------
+        # Regla general en este modulo: NO esperar estados globales de pagina
+        # ("load" / "networkidle"), sino el elemento concreto que se va a usar.
+        # El sitio tiene control de sesion que hace peticiones periodicas, asi
+        # que la red puede no quedar nunca quieta, y un solo recurso lento
+        # (imagen, fuente, script externo) basta para que "load" no dispare
+        # aunque la pagina ya este perfectamente usable.
         logger.info("Login en Integrity...")
-        page.goto(INTEGRITY_URL)
-        page.wait_for_load_state("networkidle", timeout=60000)
-        page.get_by_role("textbox", name="Usuario").click()
-        page.get_by_role("textbox", name="Usuario").fill(usuario)
+        page.goto(INTEGRITY_URL, wait_until="domcontentloaded", timeout=60000)
+
+        campo_usuario = page.get_by_role("textbox", name="Usuario")
+        campo_usuario.wait_for(state="visible", timeout=60000)
+        campo_usuario.fill(usuario)
         page.get_by_role("textbox", name="Contrasena").or_(
             page.get_by_role("textbox", name="Contraseña")
         ).fill(password)
         page.get_by_role("button", name="Ingresar").click()
 
-        # Tras "Ingresar", Integrity redirige a Menu.aspx. Esa redireccion a
-        # veces tarda, y si se intenta clickear "Configuracion" antes de que
-        # el menu termine de cargar, falla con Timeout (el boton aun no existe).
-        # Por eso se espera explicitamente: primero que la navegacion a Menu
-        # termine, y luego que el boton este realmente visible, con reintentos.
-        page.wait_for_load_state("networkidle", timeout=60000)
+        # Tras "Ingresar", Integrity redirige a Menu.aspx. Se espera la URL,
+        # que es la señal fiable de que el login funciono.
         try:
-            page.wait_for_url("**/Menu.aspx", timeout=30000)
+            page.wait_for_url("**/Menu.aspx", timeout=60000)
         except Exception:
             pass  # si ya estaba en Menu.aspx o la URL difiere, seguimos
 
@@ -254,8 +257,7 @@ def _ejecutar_flujo_integrity(
         # disponible, usando navegacion por URL..." — el menu nunca fue
         # necesario y en headless su boton ni siquiera es localizable.)
         logger.info("Abriendo Cargar revenue (navegacion directa)...")
-        page.goto(CARGAR_REVENUE_URL)
-        page.wait_for_load_state("networkidle", timeout=60000)
+        page.goto(CARGAR_REVENUE_URL, wait_until="domcontentloaded", timeout=60000)
 
         # -- Seleccionar y CARGAR el archivo ------------------------------------
         # Se apunta al <input type=file> real (#fuPlantilla), NO al boton
@@ -346,16 +348,16 @@ def _ejecutar_flujo_integrity(
         except Exception:
             pass  # sin modal no hay nada que cerrar
 
-        page.wait_for_load_state("networkidle", timeout=60000)
         logger.info("Revenue cargado correctamente.")
 
         # -- Buscar el asiento OPL del dia --------------------------------------
+        # Se espera el buscador (el elemento que realmente se necesita) en vez
+        # del estado de red, que en este sitio puede no quedar nunca quieto.
         logger.info(f"Buscando asiento: {descripcion_busqueda}...")
         page.locator(".card-pro").first.click()
-        page.wait_for_load_state("networkidle", timeout=60000)
-        page.wait_for_timeout(1000)
 
         buscador = page.locator("#txtVOUDESHeader")
+        buscador.wait_for(state="visible", timeout=60000)
         buscador.click()
         buscador.fill(descripcion_busqueda)
         buscador.press("Enter")
