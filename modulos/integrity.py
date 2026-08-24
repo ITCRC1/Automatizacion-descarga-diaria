@@ -250,14 +250,36 @@ def _ejecutar_flujo_integrity(
         except Exception:
             pass  # si ya estaba en Menu.aspx o la URL difiere, seguimos
 
-        # -- Ir directo a Cargar revenue ----------------------------------------
-        # No se navega por el menu: la pagina de carga tiene URL propia y
-        # navegar directo funciona siempre. (Los logs historicos muestran que
-        # incluso en local el flujo terminaba yendo por URL: "Link directo no
-        # disponible, usando navegacion por URL..." — el menu nunca fue
-        # necesario y en headless su boton ni siquiera es localizable.)
-        logger.info("Abriendo Cargar revenue (navegacion directa)...")
-        page.goto(CARGAR_REVENUE_URL, wait_until="domcontentloaded", timeout=60000)
+        # -- Ir a Cargar revenue ------------------------------------------------
+        # Se navega POR EL MENU, no por URL fija. La URL directa que se usaba
+        # antes empezo a dar HTTP 404 (24/08/2026): el sitio movio o renombro la
+        # pagina. El menu sobrevive a ese tipo de cambios porque es la propia
+        # aplicacion la que dice donde vive la pagina. La URL vieja queda solo
+        # como ultimo recurso por si el menu no estuviera disponible.
+        logger.info("Abriendo Cargar revenue desde el menu...")
+        abierto_por_menu = False
+        try:
+            page.get_by_role("button", name="Configuración").or_(
+                page.get_by_role("button", name="Configuracion")
+            ).click(timeout=20000)
+            page.get_by_role("link", name="Cargar revenue").click(timeout=20000)
+            abierto_por_menu = True
+            logger.info(f"Cargar revenue abierto desde el menu. URL actual: {page.url}")
+        except Exception as e:
+            logger.warning(f"No se pudo abrir 'Cargar revenue' desde el menu: {e}")
+
+        if not abierto_por_menu:
+            logger.info(f"Probando la URL directa como ultimo recurso: {CARGAR_REVENUE_URL}")
+            page.goto(CARGAR_REVENUE_URL, wait_until="domcontentloaded", timeout=60000)
+
+        # Si se cayo en la pagina de error de ASP.NET, decirlo claro: sin esto el
+        # sintoma es un timeout de 30s buscando #fuPlantilla, que no explica nada.
+        if "cannot be found" in (page.title() or ""):
+            raise RuntimeError(
+                f"La pagina de carga de revenue no existe (HTTP 404) en: {page.url}\n"
+                "El sitio la movio o renombro. Hay que actualizar la navegacion "
+                "o la constante CARGAR_REVENUE_URL con la ruta nueva."
+            )
 
         # -- Seleccionar y CARGAR el archivo ------------------------------------
         # Se apunta al <input type=file> real (#fuPlantilla), NO al boton
