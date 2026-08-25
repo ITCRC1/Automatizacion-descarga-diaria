@@ -32,7 +32,13 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 INTEGRITY_URL = "https://www.programarcr.com/conta506/index.aspx"
-CARGAR_REVENUE_URL = "https://www.programarcr.com/Conta506/forms/7_configuracion/1_opera/frmParametros_OperaCargarRevenue.aspx"
+
+# Ruta actual de "Cargar revenue", tomada del href del propio menu del sitio
+# (25/08/2026). La ruta anterior incluia carpetas intermedias
+# (.../forms/7_configuracion/1_opera/...) que el sitio elimino, y esa URL
+# empezo a devolver HTTP 404. Si vuelve a fallar con 404, el log lista el menu
+# completo con el href de cada opcion para actualizar esta constante.
+CARGAR_REVENUE_URL = "https://www.programarcr.com/Conta506/forms/frmParametros_OperaCargarRevenue.aspx"
 
 
 def _fecha_negocio_del_xml(ruta: Path):
@@ -276,60 +282,43 @@ def _ejecutar_flujo_integrity(
             pass  # si ya estaba en Menu.aspx o la URL difiere, seguimos
 
         # -- Ir a Cargar revenue ------------------------------------------------
-        # Se navega POR EL MENU, no por URL fija. La URL directa que se usaba
-        # antes empezo a dar HTTP 404 (24/08/2026): el sitio movio o renombro la
-        # pagina. El menu sobrevive a ese tipo de cambios porque es la propia
-        # aplicacion la que dice donde vive la pagina. La URL vieja queda solo
-        # como ultimo recurso por si el menu no estuviera disponible.
-        logger.info("Abriendo Cargar revenue desde el menu...")
-        abierto_por_menu = False
+        # 1) Camino normal: ir directo por URL. Es lo mas rapido y estable, y no
+        #    depende de que se abran submenus desplegables (el link de "Cargar
+        #    revenue" vive dentro de uno y Playwright no lo puede clickear si el
+        #    desplegable no llego a abrirse).
+        logger.info("Abriendo Cargar revenue...")
+        page.goto(CARGAR_REVENUE_URL, wait_until="domcontentloaded", timeout=60000)
 
-        # 1) Camino normal: Configuracion -> Cargar revenue (igual que a mano).
-        try:
-            page.get_by_role("button", name="Configuración").or_(
-                page.get_by_role("button", name="Configuracion")
-            ).click(timeout=20000)
-            page.get_by_role("link", name="Cargar revenue").click(timeout=20000)
-            abierto_por_menu = True
-            logger.info(f"Cargar revenue abierto desde el menu. URL actual: {page.url}")
-        except Exception as e:
-            logger.warning(f"No se pudo abrir 'Cargar revenue' por el menu: {e}")
-
-        # 2) Respaldo: cualquier enlace que mencione "revenue", por si le
-        #    cambian el nombre al menu o a la opcion.
-        if not abierto_por_menu:
-            try:
-                enlace = page.locator("a").filter(has_text=re.compile("revenue", re.I)).first
-                enlace.wait_for(state="attached", timeout=10000)
-                logger.info(f"Enlace de revenue hallado (href={enlace.get_attribute('href')})")
-                enlace.click(timeout=15000)
-                abierto_por_menu = True
-                logger.info(f"Cargar revenue abierto. URL actual: {page.url}")
-            except Exception as e:
-                logger.warning(f"Tampoco se encontro un enlace de revenue: {e}")
-                _listar_menu(page)
-
-        if not abierto_por_menu:
-            logger.info(f"Probando la URL directa como ultimo recurso: {CARGAR_REVENUE_URL}")
-            page.goto(CARGAR_REVENUE_URL, wait_until="domcontentloaded", timeout=60000)
-
-        # Si se cayo en la pagina de error de ASP.NET, decirlo claro: sin esto el
-        # sintoma es un timeout de 30s buscando #fuPlantilla, que no explica nada.
+        # 2) Respaldo: si la URL fija dejara de existir otra vez, se toma el
+        #    href directamente del menu del sitio. Se lee el atributo en vez de
+        #    clickear, justamente para no depender del desplegable.
         if "cannot be found" in (page.title() or ""):
-            # Volver al menu para poder listarlo: la pagina de error 404 no
-            # tiene nada util que mostrar.
+            logger.warning(f"La URL fija dio 404: {CARGAR_REVENUE_URL}")
             try:
                 page.goto(
                     "https://www.programarcr.com/Conta506/Menu.aspx",
                     wait_until="domcontentloaded", timeout=30000,
                 )
-                _listar_menu(page)
+                enlace = page.locator("a").filter(has_text=re.compile("revenue", re.I)).first
+                enlace.wait_for(state="attached", timeout=15000)
+                href = enlace.get_attribute("href")
+                logger.warning(f"Ruta nueva hallada en el menu: {href} (actualizar CARGAR_REVENUE_URL)")
+                page.goto(
+                    f"https://www.programarcr.com{href}",
+                    wait_until="domcontentloaded", timeout=60000,
+                )
             except Exception as e:
-                logger.error(f"No se pudo volver al menu para listarlo: {e}")
+                logger.error(f"No se pudo hallar la ruta de revenue en el menu: {e}")
+                _listar_menu(page)
+
+        # Si ni la URL fija ni el href del menu llevaron a la pagina, cortar con
+        # un error claro: sin esto el sintoma seria un timeout de 30s buscando
+        # #fuPlantilla, que no explica nada.
+        if "cannot be found" in (page.title() or ""):
             raise RuntimeError(
                 f"La pagina de carga de revenue no existe (HTTP 404) en: {page.url}\n"
-                "El sitio la movio o renombro. Revisa el listado [MENU] en el log "
-                "para ver donde quedo la opcion y actualizar CARGAR_REVENUE_URL."
+                "Revisa el listado [MENU] en el log para ver donde quedo la "
+                "opcion y actualizar CARGAR_REVENUE_URL."
             )
 
         # -- Seleccionar y CARGAR el archivo ------------------------------------
