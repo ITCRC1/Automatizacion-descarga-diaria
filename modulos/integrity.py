@@ -19,6 +19,7 @@ Credenciales esperadas en .env:
 
 import os
 import logging
+import re
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -52,6 +53,28 @@ def _fecha_negocio_del_xml(ruta: Path):
     except Exception as e:
         logger.warning(f"No se pudo leer la fecha del XML {ruta.name}: {e}")
     return None
+
+
+def _listar_menu(page) -> None:
+    """Vuelca al log todos los enlaces y botones del menu con su texto y href.
+
+    Sirve cuando el sitio reubica una opcion: en vez de adivinar la ruta nueva
+    o buscarla a mano, el log muestra donde quedo cada cosa y con que nombre.
+    """
+    try:
+        elementos = page.evaluate(
+            "() => Array.from(document.querySelectorAll('a, button')).map(el => ({"
+            "tag: el.tagName, "
+            "texto: (el.innerText || el.title || '').trim().slice(0, 60), "
+            "href: el.getAttribute('href') || '', "
+            "onclick: (el.getAttribute('onclick') || '').slice(0, 80)"
+            "})).filter(x => x.texto || x.href || x.onclick)"
+        )
+        logger.error(f"[MENU] Enlaces y botones disponibles ({len(elementos)}):")
+        for elem in elementos:
+            logger.error(f"[MENU]   {elem}")
+    except Exception as e:
+        logger.error(f"[MENU] No se pudo listar el menu: {e}")
 
 
 def _guardar(descarga, carpeta: Path, prefijo: str, fecha_str: str) -> Path:
@@ -113,24 +136,26 @@ def subir_revenue_y_descargar(
     archivos = []
 
     with sync_playwright() as playwright:
-        # En modo headless (Railway) es OBLIGATORIO fijar un viewport grande:
-        # con no_viewport la ventana headless queda en tamaño minimo (~800px) y
-        # el sitio de Integrity, al ser responsive, colapsa el menu superior en
-        # un menu movil — el boton "Configuracion" ni siquiera se renderiza en
-        # el DOM y todo el flujo falla. Con 1920x1080 se muestra el layout de
-        # escritorio, igual que en la PC local. (Mismo enfoque que opera.py.)
-        if headless:
-            browser = playwright.chromium.launch(headless=True)
-            context = browser.new_context(
-                accept_downloads=True,
-                viewport={"width": 1920, "height": 1080},
-            )
-        else:
-            browser = playwright.chromium.launch(headless=False, args=["--start-maximized"])
-            context = browser.new_context(
-                accept_downloads=True,
-                no_viewport=True,
-            )
+        # SIEMPRE se fija un viewport de escritorio, con o sin headless.
+        #
+        # Integrity es responsive: si la ventana es angosta colapsa el menu
+        # superior en un menu movil y el boton "Configuracion" ni siquiera se
+        # renderiza en el DOM, asi que no hay forma de navegar a Cargar revenue.
+        #
+        # Antes, con headless=False (que es como lo llama main.py) se usaba
+        # "--start-maximized" + no_viewport. Eso funciona en una PC con
+        # escritorio, pero NO bajo Xvfb en el contenedor: ahi no corre ningun
+        # gestor de ventanas, y "--start-maximized" es solo una sugerencia que
+        # implementa el gestor. Sin el, la ventana se queda en su tamaño por
+        # defecto (~800px) aunque la pantalla virtual sea de 1920x1080.
+        browser = playwright.chromium.launch(
+            headless=headless,
+            args=["--window-size=1920,1080"],
+        )
+        context = browser.new_context(
+            accept_downloads=True,
+            viewport={"width": 1920, "height": 1080},
+        )
         page = context.new_page()
 
         # Playwright descarta solo los dialogos nativos (confirm/alert) cuando
@@ -258,6 +283,8 @@ def _ejecutar_flujo_integrity(
         # como ultimo recurso por si el menu no estuviera disponible.
         logger.info("Abriendo Cargar revenue desde el menu...")
         abierto_por_menu = False
+
+        # 1) Camino normal: Configuracion -> Cargar revenue (igual que a mano).
         try:
             page.get_by_role("button", name="Configuración").or_(
                 page.get_by_role("button", name="Configuracion")
@@ -266,7 +293,21 @@ def _ejecutar_flujo_integrity(
             abierto_por_menu = True
             logger.info(f"Cargar revenue abierto desde el menu. URL actual: {page.url}")
         except Exception as e:
-            logger.warning(f"No se pudo abrir 'Cargar revenue' desde el menu: {e}")
+            logger.warning(f"No se pudo abrir 'Cargar revenue' por el menu: {e}")
+
+        # 2) Respaldo: cualquier enlace que mencione "revenue", por si le
+        #    cambian el nombre al menu o a la opcion.
+        if not abierto_por_menu:
+            try:
+                enlace = page.locator("a").filter(has_text=re.compile("revenue", re.I)).first
+                enlace.wait_for(state="attached", timeout=10000)
+                logger.info(f"Enlace de revenue hallado (href={enlace.get_attribute('href')})")
+                enlace.click(timeout=15000)
+                abierto_por_menu = True
+                logger.info(f"Cargar revenue abierto. URL actual: {page.url}")
+            except Exception as e:
+                logger.warning(f"Tampoco se encontro un enlace de revenue: {e}")
+                _listar_menu(page)
 
         if not abierto_por_menu:
             logger.info(f"Probando la URL directa como ultimo recurso: {CARGAR_REVENUE_URL}")
@@ -275,10 +316,20 @@ def _ejecutar_flujo_integrity(
         # Si se cayo en la pagina de error de ASP.NET, decirlo claro: sin esto el
         # sintoma es un timeout de 30s buscando #fuPlantilla, que no explica nada.
         if "cannot be found" in (page.title() or ""):
+            # Volver al menu para poder listarlo: la pagina de error 404 no
+            # tiene nada util que mostrar.
+            try:
+                page.goto(
+                    "https://www.programarcr.com/Conta506/Menu.aspx",
+                    wait_until="domcontentloaded", timeout=30000,
+                )
+                _listar_menu(page)
+            except Exception as e:
+                logger.error(f"No se pudo volver al menu para listarlo: {e}")
             raise RuntimeError(
                 f"La pagina de carga de revenue no existe (HTTP 404) en: {page.url}\n"
-                "El sitio la movio o renombro. Hay que actualizar la navegacion "
-                "o la constante CARGAR_REVENUE_URL con la ruta nueva."
+                "El sitio la movio o renombro. Revisa el listado [MENU] en el log "
+                "para ver donde quedo la opcion y actualizar CARGAR_REVENUE_URL."
             )
 
         # -- Seleccionar y CARGAR el archivo ------------------------------------
