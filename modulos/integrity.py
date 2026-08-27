@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 # Subir este numero al cambiar el modulo: el log lo imprime al arrancar, asi
 # se ve enseguida si el contenedor tiene el codigo nuevo o una imagen vieja.
-VERSION_MODULO = "2026-08-27-c (interfaz nueva + paso de seleccion de compañia)"
+VERSION_MODULO = "2026-08-27-d (compañia por btnIngresarComp + diagnostico del POST de login)"
 
 BASE_URL = "https://www.programarcr.com"
 INTEGRITY_URL = f"{BASE_URL}/Conta506/login"
@@ -280,10 +280,34 @@ def _ejecutar_flujo_integrity(
             page.get_by_role("textbox", name="Contraseña")
         ).fill(password)
 
+        # Diagnostico previo al click: el boton tiene onclick="return
+        # ValidarTXTLogin()", que cancela el envio si algun campo esta vacio (o
+        # solo con espacios). Se registra el estado real de los campos y el
+        # resultado de esa validacion, sin exponer la contraseña.
+        try:
+            estado = page.evaluate(
+                "() => ({usuario: (document.getElementById('txtUser')||{}).value || '', "
+                "largo_pass: ((document.getElementById('txtPassword')||{}).value || '').length, "
+                "validacion: typeof ValidarTXTLogin === 'function' ? ValidarTXTLogin() : 'sin funcion'})"
+            )
+            logger.info(f"[LOGIN] Campos antes de enviar: {estado}")
+        except Exception as e:
+            logger.warning(f"[LOGIN] No se pudo inspeccionar el formulario: {e}")
+
         # Se clickea #btnIngresar por ID: en la pagina hay DOS controles con el
         # nombre "Ingresar" (btnIngresar visible y btnIngresarComp oculto), asi
-        # que buscarlos por rol es ambiguo.
-        page.locator("#btnIngresar").click()
+        # que buscarlos por rol es ambiguo. Se captura el POST y la respuesta
+        # del servidor: si el click no genera ninguna peticion, el problema es
+        # del lado del navegador; si la genera, la respuesta dice que paso.
+        try:
+            with page.expect_response(
+                lambda r: r.request.method == "POST", timeout=20000
+            ) as resp_login:
+                page.locator("#btnIngresar").click()
+            respuesta = resp_login.value
+            logger.info(f"[LOGIN] POST {respuesta.url[:150]} -> HTTP {respuesta.status}")
+        except Exception as e:
+            logger.error(f"[LOGIN] El click en Ingresar no genero ninguna peticion POST: {e}")
 
         # -- Segundo paso: seleccion de compañia --------------------------------
         # El formulario trae un combo #cbCompanias y un segundo boton
@@ -292,28 +316,41 @@ def _ejecutar_flujo_integrity(
         # entrar. En un navegador con sesion previa este paso puede no verse
         # (por eso no salio al grabar), pero el contenedor arranca siempre
         # limpio y ahi si aparece: sin esto el proceso se queda en el login.
-        combo_compania = page.locator("#cbCompanias")
+        # La señal de que el paso aparecio es #btnIngresarComp, que la funcion
+        # Login() del sitio deja visible. NO se espera que #cbCompanias sea
+        # visible: ese <select> tiene clase "original-select", o sea que un
+        # componente visual lo reemplaza y el select real queda oculto siempre.
+        boton_compania = page.locator("#btnIngresarComp")
         try:
-            combo_compania.wait_for(state="visible", timeout=10000)
-            opciones = combo_compania.evaluate(
+            boton_compania.wait_for(state="visible", timeout=15000)
+
+            opciones = page.locator("#cbCompanias").evaluate(
                 "el => Array.from(el.options).map(o => ({valor: o.value, texto: o.text.trim()}))"
             )
             logger.info(f"Paso de compañia detectado. Opciones: {opciones}")
 
-            # Se puede fijar cual con INTEGRITY_COMPANIA en el .env; si no, se
-            # toma la primera opcion que tenga un valor real.
-            deseada = os.getenv("INTEGRITY_COMPANIA")
-            if deseada:
-                combo_compania.select_option(label=deseada)
-                logger.info(f"Compañia seleccionada por configuracion: {deseada}")
-            else:
-                validas = [o for o in opciones if o["valor"]]
-                if not validas:
-                    raise RuntimeError(f"El combo de compañias no trae opciones: {opciones}")
-                combo_compania.select_option(value=validas[0]["valor"])
-                logger.info(f"Compañia seleccionada (primera): {validas[0]['texto']}")
+            validas = [o for o in opciones if o["valor"]]
+            if not validas:
+                raise RuntimeError(f"El combo de compañias no trae opciones: {opciones}")
 
-            page.locator("#btnIngresarComp").click()
+            # Se puede fijar cual con INTEGRITY_COMPANIA; si no, se toma la
+            # primera con valor real.
+            deseada = os.getenv("INTEGRITY_COMPANIA")
+            elegida = next(
+                (o for o in validas if deseada and deseada.lower() in o["texto"].lower()),
+                validas[0],
+            )
+
+            # Se asigna por JS y se dispara "change" a mano: select_option exige
+            # que el elemento sea visible, y este select esta oculto por diseño.
+            page.locator("#cbCompanias").evaluate(
+                "(el, valor) => { el.value = valor; "
+                "el.dispatchEvent(new Event('change', {bubbles: true})); }",
+                elegida["valor"],
+            )
+            logger.info(f"Compañia seleccionada: {elegida['texto']}")
+
+            boton_compania.click()
         except Exception as e:
             logger.info(f"Sin paso de compañia (o no fue necesario): {e}")
 
