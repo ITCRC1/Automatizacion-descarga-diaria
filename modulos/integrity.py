@@ -31,14 +31,18 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-INTEGRITY_URL = "https://www.programarcr.com/conta506/index.aspx"
+# Subir este numero al cambiar el modulo: el log lo imprime al arrancar, asi
+# se ve enseguida si el contenedor tiene el codigo nuevo o una imagen vieja.
+VERSION_MODULO = "2026-08-27-c (interfaz nueva + paso de seleccion de compañia)"
 
-# Ruta actual de "Cargar revenue", tomada del href del propio menu del sitio
-# (25/08/2026). La ruta anterior incluia carpetas intermedias
-# (.../forms/7_configuracion/1_opera/...) que el sitio elimino, y esa URL
-# empezo a devolver HTTP 404. Si vuelve a fallar con 404, el log lista el menu
-# completo con el href de cada opcion para actualizar esta constante.
-CARGAR_REVENUE_URL = "https://www.programarcr.com/Conta506/forms/frmParametros_OperaCargarRevenue.aspx"
+BASE_URL = "https://www.programarcr.com"
+INTEGRITY_URL = f"{BASE_URL}/Conta506/login"
+MENU_URL = f"{BASE_URL}/Conta506/Menu.aspx"
+
+# La ruta de "Cargar revenue" ya cambio dos veces en agosto de 2026 (el sitio
+# esta en rediseño), asi que NO se usa una constante fija: se lee el href del
+# enlace en el propio menu. Esta queda solo como ultimo recurso.
+CARGAR_REVENUE_URL = f"{BASE_URL}/Conta506/forms/frmParametros_OperaCargarRevenue.aspx"
 
 
 def _fecha_negocio_del_xml(ruta: Path):
@@ -263,6 +267,9 @@ def _ejecutar_flujo_integrity(
         # que la red puede no quedar nunca quieta, y un solo recurso lento
         # (imagen, fuente, script externo) basta para que "load" no dispare
         # aunque la pagina ya este perfectamente usable.
+        # Marca de version: sirve para saber de un vistazo si el contenedor esta
+        # corriendo el codigo actual o una imagen vieja sin reconstruir.
+        logger.info(f"[VERSION] integrity.py {VERSION_MODULO}")
         logger.info("Login en Integrity...")
         page.goto(INTEGRITY_URL, wait_until="domcontentloaded", timeout=60000)
 
@@ -272,53 +279,106 @@ def _ejecutar_flujo_integrity(
         page.get_by_role("textbox", name="Contrasena").or_(
             page.get_by_role("textbox", name="Contraseña")
         ).fill(password)
-        page.get_by_role("button", name="Ingresar").click()
 
-        # Tras "Ingresar", Integrity redirige a Menu.aspx. Se espera la URL,
-        # que es la señal fiable de que el login funciono.
+        # Se clickea #btnIngresar por ID: en la pagina hay DOS controles con el
+        # nombre "Ingresar" (btnIngresar visible y btnIngresarComp oculto), asi
+        # que buscarlos por rol es ambiguo.
+        page.locator("#btnIngresar").click()
+
+        # -- Segundo paso: seleccion de compañia --------------------------------
+        # El formulario trae un combo #cbCompanias y un segundo boton
+        # #btnIngresarComp, ambos ocultos al cargar. Si el usuario tiene mas de
+        # una compañia, tras "Ingresar" aparecen y hay que elegir una para
+        # entrar. En un navegador con sesion previa este paso puede no verse
+        # (por eso no salio al grabar), pero el contenedor arranca siempre
+        # limpio y ahi si aparece: sin esto el proceso se queda en el login.
+        combo_compania = page.locator("#cbCompanias")
+        try:
+            combo_compania.wait_for(state="visible", timeout=10000)
+            opciones = combo_compania.evaluate(
+                "el => Array.from(el.options).map(o => ({valor: o.value, texto: o.text.trim()}))"
+            )
+            logger.info(f"Paso de compañia detectado. Opciones: {opciones}")
+
+            # Se puede fijar cual con INTEGRITY_COMPANIA en el .env; si no, se
+            # toma la primera opcion que tenga un valor real.
+            deseada = os.getenv("INTEGRITY_COMPANIA")
+            if deseada:
+                combo_compania.select_option(label=deseada)
+                logger.info(f"Compañia seleccionada por configuracion: {deseada}")
+            else:
+                validas = [o for o in opciones if o["valor"]]
+                if not validas:
+                    raise RuntimeError(f"El combo de compañias no trae opciones: {opciones}")
+                combo_compania.select_option(value=validas[0]["valor"])
+                logger.info(f"Compañia seleccionada (primera): {validas[0]['texto']}")
+
+            page.locator("#btnIngresarComp").click()
+        except Exception as e:
+            logger.info(f"Sin paso de compañia (o no fue necesario): {e}")
+
+        # Verificar que el login REALMENTE funciono. Antes esto se ignoraba con
+        # un "except: pass", y el proceso seguia sin sesion: el sintoma aparecia
+        # mucho despues como un 404 o un timeout buscando #fuPlantilla, que no
+        # tienen nada que ver con la causa.
         try:
             page.wait_for_url("**/Menu.aspx", timeout=60000)
+            logger.info("Login correcto.")
         except Exception:
-            pass  # si ya estaba en Menu.aspx o la URL difiere, seguimos
+            if "/login" in page.url or "index.aspx" in page.url:
+                # Seguimos en la pantalla de login: capturar el mensaje que
+                # muestre el sitio (credenciales, paso extra, bloqueo, etc.).
+                try:
+                    texto = page.locator("body").inner_text(timeout=5000)
+                    resumen = " | ".join(l.strip() for l in texto.splitlines() if l.strip())[:600]
+                except Exception:
+                    resumen = "(no se pudo leer el texto de la pagina)"
+                _listar_menu(page)
+                raise RuntimeError(
+                    f"El login no paso: seguimos en {page.url}\n"
+                    f"Texto de la pagina: {resumen}\n"
+                    "Puede ser un cambio en la pantalla de login (por ejemplo un "
+                    "paso extra de compañia: existe un boton oculto btnIngresarComp) "
+                    "o credenciales rechazadas."
+                )
+            logger.warning(f"No se llego a Menu.aspx; URL actual: {page.url}. Se continua.")
 
         # -- Ir a Cargar revenue ------------------------------------------------
-        # 1) Camino normal: ir directo por URL. Es lo mas rapido y estable, y no
-        #    depende de que se abran submenus desplegables (el link de "Cargar
-        #    revenue" vive dentro de uno y Playwright no lo puede clickear si el
-        #    desplegable no llego a abrirse).
+        # La ruta se LEE del menu en vez de estar fija: el sitio ya la movio dos
+        # veces en agosto de 2026. Se toma el href del enlace (no se clickea),
+        # porque el enlace vive dentro de un desplegable y Playwright no puede
+        # clickear lo que no esta visible — pero el atributo si se puede leer
+        # aunque el desplegable este cerrado.
         logger.info("Abriendo Cargar revenue...")
-        page.goto(CARGAR_REVENUE_URL, wait_until="domcontentloaded", timeout=60000)
+        destino_revenue = None
+        try:
+            enlace = page.locator("a").filter(has_text=re.compile("revenue", re.I)).first
+            enlace.wait_for(state="attached", timeout=20000)
+            href = enlace.get_attribute("href")
+            if href:
+                destino_revenue = href if href.startswith("http") else f"{BASE_URL}{href}"
+                logger.info(f"Ruta de Cargar revenue tomada del menu: {destino_revenue}")
+        except Exception as e:
+            logger.warning(f"No se pudo leer la ruta desde el menu: {e}")
 
-        # 2) Respaldo: si la URL fija dejara de existir otra vez, se toma el
-        #    href directamente del menu del sitio. Se lee el atributo en vez de
-        #    clickear, justamente para no depender del desplegable.
+        if not destino_revenue:
+            destino_revenue = CARGAR_REVENUE_URL
+            logger.info(f"Usando la ruta de respaldo: {destino_revenue}")
+
+        page.goto(destino_revenue, wait_until="domcontentloaded", timeout=60000)
+
+        # Si no se llego a la pagina, cortar con un error claro: sin esto el
+        # sintoma seria un timeout de 30s buscando #fuPlantilla, que no explica
+        # nada. Se lista el menu para ver donde quedo la opcion.
         if "cannot be found" in (page.title() or ""):
-            logger.warning(f"La URL fija dio 404: {CARGAR_REVENUE_URL}")
             try:
-                page.goto(
-                    "https://www.programarcr.com/Conta506/Menu.aspx",
-                    wait_until="domcontentloaded", timeout=30000,
-                )
-                enlace = page.locator("a").filter(has_text=re.compile("revenue", re.I)).first
-                enlace.wait_for(state="attached", timeout=15000)
-                href = enlace.get_attribute("href")
-                logger.warning(f"Ruta nueva hallada en el menu: {href} (actualizar CARGAR_REVENUE_URL)")
-                page.goto(
-                    f"https://www.programarcr.com{href}",
-                    wait_until="domcontentloaded", timeout=60000,
-                )
-            except Exception as e:
-                logger.error(f"No se pudo hallar la ruta de revenue en el menu: {e}")
+                page.goto(MENU_URL, wait_until="domcontentloaded", timeout=30000)
                 _listar_menu(page)
-
-        # Si ni la URL fija ni el href del menu llevaron a la pagina, cortar con
-        # un error claro: sin esto el sintoma seria un timeout de 30s buscando
-        # #fuPlantilla, que no explica nada.
-        if "cannot be found" in (page.title() or ""):
+            except Exception as e:
+                logger.error(f"No se pudo listar el menu: {e}")
             raise RuntimeError(
-                f"La pagina de carga de revenue no existe (HTTP 404) en: {page.url}\n"
-                "Revisa el listado [MENU] en el log para ver donde quedo la "
-                "opcion y actualizar CARGAR_REVENUE_URL."
+                f"La pagina de carga de revenue no existe (HTTP 404) en: {destino_revenue}\n"
+                "Revisa el listado [MENU] en el log para ver donde quedo la opcion."
             )
 
         # -- Seleccionar y CARGAR el archivo ------------------------------------
@@ -416,9 +476,19 @@ def _ejecutar_flujo_integrity(
         # Se espera el buscador (el elemento que realmente se necesita) en vez
         # del estado de red, que en este sitio puede no quedar nunca quieto.
         logger.info(f"Buscando asiento: {descripcion_busqueda}...")
-        page.locator(".card-pro").first.click()
+        # Interfaz nueva (27/08/2026): se entra por el link "Nuevo asiento
+        # Registrar"; antes era una tarjeta con clase .card-pro, que ya no
+        # existe. Se deja la vieja como respaldo.
+        try:
+            page.get_by_role("link", name="Nuevo asiento Registrar").click(timeout=20000)
+        except Exception:
+            logger.info("No se hallo 'Nuevo asiento Registrar'; probando .card-pro.")
+            page.locator(".card-pro").first.click(timeout=20000)
 
-        buscador = page.locator("#txtVOUDESHeader")
+        # El ID del buscador tambien cambio con el rediseño.
+        buscador = page.locator("#txtAsientos_EncVOUDESHeader").or_(
+            page.locator("#txtVOUDESHeader")
+        ).first
         buscador.wait_for(state="visible", timeout=60000)
         buscador.click()
         buscador.fill(descripcion_busqueda)
@@ -437,37 +507,14 @@ def _ejecutar_flujo_integrity(
 
         # -- Descargar el Excel del asiento -------------------------------------
         logger.info(f"Descargando Excel del asiento ({filas.count()} fila(s) encontrada(s))...")
-        # Puede haber mas de un asiento cuyo nombre contenga esta descripcion
-        # (p.ej. un duplicado de un intento anterior). Se toma el mas reciente.
-        fila = page.get_by_role("row", name="OPL - Ingresos Opera/").last
-        fila.locator("#dropdownMenuButton").click()
-        page.wait_for_timeout(800)
-        # "Generar excel" se busca DENTRO de la fila: cada asiento tiene el suyo,
-        # y buscarlo global falla por modo estricto cuando hay duplicados (ademas
-        # de arriesgar bajar el Excel del asiento equivocado). Si el menu se
-        # renderiza fuera del <tr> — Bootstrap a veces lo cuelga del body — no
-        # habria coincidencias dentro de la fila; en ese caso se cae al ultimo
-        # del documento, que corresponde a la misma fila elegida con .last.
-        generar_excel = fila.get_by_text("Generar excel")
-        if generar_excel.count() == 0:
-            logger.info("El menu no esta dentro de la fila; usando el ultimo del documento.")
-            generar_excel = page.get_by_text("Generar excel").last
-        else:
-            generar_excel = generar_excel.first
-
+        # Interfaz nueva (27/08/2026): la descarga es un icono de Excel en la
+        # fila, que baja el archivo directo. Antes habia que abrir el menu ⋮,
+        # elegir "Generar excel" y esperar un popup; nada de eso existe ya.
+        icono_excel = page.locator(".bi.bi-file-earmark-excel-fill").first
+        icono_excel.wait_for(state="visible", timeout=30000)
         with page.expect_download() as dl_info:
-            with page.expect_popup() as popup_info:
-                generar_excel.click()
-            popup = popup_info.value
-
-        # El popup es el que ejecuta la descarga: se cierra DESPUES de que el
-        # archivo termino de bajar. Cerrarlo antes (como estaba) puede abortarla.
-        descarga = dl_info.value
-        try:
-            popup.close()
-        except Exception:
-            pass  # el popup pudo cerrarse solo al terminar la descarga
-        archivos.append(_guardar(descarga, carpeta_destino, "INTEGRITY_OPL", fecha_str))
+            icono_excel.click()
+        archivos.append(_guardar(dl_info.value, carpeta_destino, "INTEGRITY_OPL", fecha_str))
 
 
 if __name__ == "__main__":
