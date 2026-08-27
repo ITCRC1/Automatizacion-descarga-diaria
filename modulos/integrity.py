@@ -33,11 +33,14 @@ logger = logging.getLogger(__name__)
 
 # Subir este numero al cambiar el modulo: el log lo imprime al arrancar, asi
 # se ve enseguida si el contenedor tiene el codigo nuevo o una imagen vieja.
-VERSION_MODULO = "2026-08-27-d (compañia por btnIngresarComp + diagnostico del POST de login)"
+VERSION_MODULO = "2026-08-27-e (login va a /dashboard, no a Menu.aspx)"
 
 BASE_URL = "https://www.programarcr.com"
 INTEGRITY_URL = f"{BASE_URL}/Conta506/login"
-MENU_URL = f"{BASE_URL}/Conta506/Menu.aspx"
+# Tras el login el sitio va a /Conta506/dashboard (antes era /Conta506/Menu.aspx).
+MENU_URL = f"{BASE_URL}/Conta506/dashboard"
+# Patron que reconoce la pantalla principal con cualquiera de los dos nombres.
+RE_MENU = re.compile(r"/(dashboard|Menu\.aspx)", re.I)
 
 # La ruta de "Cargar revenue" ya cambio dos veces en agosto de 2026 (el sitio
 # esta en rediseño), asi que NO se usa una constante fija: se lee el href del
@@ -359,8 +362,8 @@ def _ejecutar_flujo_integrity(
         # mucho despues como un 404 o un timeout buscando #fuPlantilla, que no
         # tienen nada que ver con la causa.
         try:
-            page.wait_for_url("**/Menu.aspx", timeout=60000)
-            logger.info("Login correcto.")
+            page.wait_for_url(RE_MENU, timeout=60000)
+            logger.info(f"Login correcto. URL: {page.url}")
         except Exception:
             if "/login" in page.url or "index.aspx" in page.url:
                 # Seguimos en la pantalla de login: capturar el mensaje que
@@ -370,15 +373,14 @@ def _ejecutar_flujo_integrity(
                     resumen = " | ".join(l.strip() for l in texto.splitlines() if l.strip())[:600]
                 except Exception:
                     resumen = "(no se pudo leer el texto de la pagina)"
-                _listar_menu(page)
                 raise RuntimeError(
                     f"El login no paso: seguimos en {page.url}\n"
                     f"Texto de la pagina: {resumen}\n"
-                    "Puede ser un cambio en la pantalla de login (por ejemplo un "
-                    "paso extra de compañia: existe un boton oculto btnIngresarComp) "
-                    "o credenciales rechazadas."
+                    "OJO: el usuario distingue mayusculas de minusculas. Verifica "
+                    "que INTEGRITY_USERNAME este exactamente como en el sitio "
+                    "(por ejemplo 'jretana', no 'JRETANA')."
                 )
-            logger.warning(f"No se llego a Menu.aspx; URL actual: {page.url}. Se continua.")
+            logger.warning(f"No se llego a la pantalla principal; URL actual: {page.url}. Se continua.")
 
         # -- Ir a Cargar revenue ------------------------------------------------
         # La ruta se LEE del menu en vez de estar fija: el sitio ya la movio dos
