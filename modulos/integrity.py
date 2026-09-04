@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 # Subir este numero al cambiar el modulo: el log lo imprime al arrancar, asi
 # se ve enseguida si el contenedor tiene el codigo nuevo o una imagen vieja.
-VERSION_MODULO = "2026-08-27-e (login va a /dashboard, no a Menu.aspx)"
+VERSION_MODULO = "2026-09-04-a (rutas de revenue y asientos capturadas del menu al entrar)"
 
 BASE_URL = "https://www.programarcr.com"
 INTEGRITY_URL = f"{BASE_URL}/Conta506/login"
@@ -65,6 +65,38 @@ def _fecha_negocio_del_xml(ruta: Path):
             return datetime.strptime(valor, "%Y-%m-%d") if valor else None
     except Exception as e:
         logger.warning(f"No se pudo leer la fecha del XML {ruta.name}: {e}")
+    return None
+
+
+def _href_del_menu(page, patron: str, exacto: bool = False):
+    """Devuelve la URL absoluta del enlace del menu cuyo texto coincide.
+
+    Las rutas de este sitio cambian seguido (en agosto/septiembre de 2026 se
+    movieron tres veces), asi que en vez de hardcodearlas se leen del menu. Se
+    lee el atributo href y NO se clickea: los enlaces viven dentro de
+    desplegables cerrados, y Playwright no puede clickear lo que no esta
+    visible, pero si puede leer sus atributos.
+
+    exacto=True compara el texto completo (para distinguir "Asientos" de
+    "Asientos fijos", "Asientos aplicados", etc.).
+    """
+    try:
+        href = page.evaluate(
+            "([patron, exacto]) => {"
+            "  const p = patron.toLowerCase();"
+            "  const enlaces = Array.from(document.querySelectorAll('a'));"
+            "  const found = enlaces.find(a => {"
+            "    const t = (a.innerText || '').trim().toLowerCase();"
+            "    return exacto ? t === p : t.includes(p);"
+            "  });"
+            "  return found ? found.getAttribute('href') : null;"
+            "}",
+            [patron, exacto],
+        )
+        if href:
+            return href if href.startswith("http") else f"{BASE_URL}{href}"
+    except Exception as e:
+        logger.warning(f"No se pudo leer la ruta de '{patron}' en el menu: {e}")
     return None
 
 
@@ -388,17 +420,14 @@ def _ejecutar_flujo_integrity(
         # porque el enlace vive dentro de un desplegable y Playwright no puede
         # clickear lo que no esta visible — pero el atributo si se puede leer
         # aunque el desplegable este cerrado.
+        # IMPORTANTE: las dos rutas se capturan AHORA, con el menu a la vista.
+        # Despues de cargar el revenue el sitio navega a una pagina que puede
+        # responder 404, y ahi ya no hay menu del cual leerlas.
         logger.info("Abriendo Cargar revenue...")
-        destino_revenue = None
-        try:
-            enlace = page.locator("a").filter(has_text=re.compile("revenue", re.I)).first
-            enlace.wait_for(state="attached", timeout=20000)
-            href = enlace.get_attribute("href")
-            if href:
-                destino_revenue = href if href.startswith("http") else f"{BASE_URL}{href}"
-                logger.info(f"Ruta de Cargar revenue tomada del menu: {destino_revenue}")
-        except Exception as e:
-            logger.warning(f"No se pudo leer la ruta desde el menu: {e}")
+        destino_revenue = _href_del_menu(page, "revenue")
+        destino_asientos = _href_del_menu(page, "Asientos", exacto=True)
+        logger.info(f"Ruta de Cargar revenue: {destino_revenue}")
+        logger.info(f"Ruta de Asientos: {destino_asientos}")
 
         if not destino_revenue:
             destino_revenue = CARGAR_REVENUE_URL
@@ -515,14 +544,19 @@ def _ejecutar_flujo_integrity(
         # Se espera el buscador (el elemento que realmente se necesita) en vez
         # del estado de red, que en este sitio puede no quedar nunca quieto.
         logger.info(f"Buscando asiento: {descripcion_busqueda}...")
-        # Interfaz nueva (27/08/2026): se entra por el link "Nuevo asiento
-        # Registrar"; antes era una tarjeta con clase .card-pro, que ya no
-        # existe. Se deja la vieja como respaldo.
-        try:
-            page.get_by_role("link", name="Nuevo asiento Registrar").click(timeout=20000)
-        except Exception:
-            logger.info("No se hallo 'Nuevo asiento Registrar'; probando .card-pro.")
-            page.locator(".card-pro").first.click(timeout=20000)
+        # Se navega DIRECTO a la ruta de Asientos capturada del menu al entrar.
+        # No se depende de clickear una tarjeta ni un acceso rapido: tras cargar
+        # el revenue el sitio queda en una pagina que a veces responde 404, sin
+        # menu ni accesos, y cualquier click ahi falla por timeout.
+        if destino_asientos:
+            page.goto(destino_asientos, wait_until="domcontentloaded", timeout=60000)
+        else:
+            logger.warning("No se capturo la ruta de Asientos; probando por accesos rapidos.")
+            try:
+                page.get_by_role("link", name="Nuevo asiento Registrar").click(timeout=20000)
+            except Exception:
+                logger.info("No se hallo 'Nuevo asiento Registrar'; probando .card-pro.")
+                page.locator(".card-pro").first.click(timeout=20000)
 
         # El ID del buscador tambien cambio con el rediseño.
         buscador = page.locator("#txtAsientos_EncVOUDESHeader").or_(
@@ -534,22 +568,26 @@ def _ejecutar_flujo_integrity(
         buscador.press("Enter")
         page.wait_for_timeout(2000)
 
-        # Si la busqueda no devolvio filas, cortar con un error que diga QUE se
-        # busco. Sin esto el sintoma era un timeout de 30s sobre el menu de una
-        # fila inexistente, que no dice nada sobre la causa.
-        filas = page.get_by_role("row", name="OPL - Ingresos Opera/")
-        if filas.count() == 0:
+        # Se cuentan los iconos de Excel, uno por asiento listado: es la señal
+        # fiable de cuantos resultados dejo la busqueda. NO se usa el conteo de
+        # get_by_role("row"), que incluye la fila de encabezado (verificado
+        # contra el sitio: esa fila matchea el patron y no contiene iconos).
+        iconos_excel = page.locator(".bi.bi-file-earmark-excel-fill")
+        encontrados = iconos_excel.count()
+        if encontrados == 0:
             raise RuntimeError(
                 f"No se encontro ningun asiento '{descripcion_busqueda}' en Integrity. "
                 "Revisa que la carga del revenue haya generado el asiento de esa fecha."
             )
 
         # -- Descargar el Excel del asiento -------------------------------------
-        logger.info(f"Descargando Excel del asiento ({filas.count()} fila(s) encontrada(s))...")
         # Interfaz nueva (27/08/2026): la descarga es un icono de Excel en la
         # fila, que baja el archivo directo. Antes habia que abrir el menu ⋮,
         # elegir "Generar excel" y esperar un popup; nada de eso existe ya.
-        icono_excel = page.locator(".bi.bi-file-earmark-excel-fill").first
+        # Si hay mas de uno son cargas repetidas del mismo revenue (mismo dato),
+        # asi que se toma el primero.
+        logger.info(f"Descargando Excel del asiento ({encontrados} resultado(s))...")
+        icono_excel = iconos_excel.first
         icono_excel.wait_for(state="visible", timeout=30000)
         with page.expect_download() as dl_info:
             icono_excel.click()
